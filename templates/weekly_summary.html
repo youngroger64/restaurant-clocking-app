@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Weekly Summary</title>
+</head>
+<body>
+
+<h1>Weekly Hours Summary</h1>
+
+<p>
+This page compares rostered hours against actual clock-in/out records.
+Worked hours are calculated from paired IN and OUT events.
+Warnings highlight missing clock-outs, no clock events, or possible overtime.
+</p>
+
+<form method="get">
+    Week Start:
+    <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+    <button type="submit">View Week</button>
+</form>
+
+<h2>{{ week_start }} to {{ week_end }}</h2>
+
+<table border="1" cellpadding="8">
+    <tr>
+        <th>Employee No</th>
+        <th>Employee</th>
+        <th>Rostered Hours</th>
+        <th>Worked Hours</th>
+        <th>Difference</th>
+        <th>Status / Warning</th>
+    </tr>
+
+    {% for row in summary_rows %}
+    <tr>
+        <td>{{ row.employee_number }}</td>
+        <td>{{ row.employee }}</td>
+        <td>{{ row.rostered_hours }}</td>
+        <td>{{ row.worked_hours }}</td>
+        <td>{{ row.difference }}</td>
+        <td>{{ row.warning }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<p>
+    <a href="/manager/dashboard/">Dashboard</a> |
+    <a href="/manager/upload-roster/">Upload Roster</a> |
+    <a href="/admin/">Admin</a>
+</p>
+
+</body>
+</html>

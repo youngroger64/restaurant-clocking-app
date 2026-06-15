@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Restaurant Clocking</title>
+</head>
+<body>
+
+<h1>Staff Clocking System</h1>
+
+<p>
+Use this page to clock in, start/end unpaid breaks, and clock out.
+</p>
+
+<form method="post">
+    {% csrf_token %}
+
+    <p>
+        Employee Number<br>
+        <input type="text" name="employee_number" required>
+    </p>
+
+    <p>
+        PIN<br>
+        <input type="password" name="pin" required>
+    </p>
+
+    <p>
+        <button type="submit" name="action" value="IN">
+            Clock In
+        </button>
+    </p>
+
+    <p>
+        <button type="submit" name="action" value="BREAK_START">
+            Start Break
+        </button>
+    </p>
+
+    <p>
+        <button type="submit" name="action" value="BREAK_END">
+            End Break
+        </button>
+    </p>
+
+    <p>
+        <button type="submit" name="action" value="OUT">
+            Clock Out
+        </button>
+    </p>
+
+</form>
+
+<h3>{{ message }}</h3>
+
+<p>
+    <a href="/">Home</a>
+</p>
+
+</body>
+</html>

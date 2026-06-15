@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manager Dashboard</title>
+</head>
+<body>
+
+<h1>Manager Dashboard</h1>
+<p>
+This dashboard shows today's roster and the latest clocking status for each employee.
+Use it during the day to see who is currently in, who has clocked out, and who has not arrived.
+</p>
+
+<h2>Today: {{ today }}</h2>
+
+<h2>Today's Roster Status</h2>
+
+<table border="1" cellpadding="8">
+    <tr>
+        <th>Employee</th>
+        <th>Rostered Start</th>
+        <th>Rostered End</th>
+        <th>Status</th>
+        <th>Last Event Time</th>
+    </tr>
+
+    {% for row in dashboard_rows %}
+    <tr>
+        <td>{{ row.employee }}</td>
+        <td>{{ row.start }}</td>
+        <td>{{ row.end }}</td>
+        <td>{{ row.status }}</td>
+        <td>{{ row.last_event_time }}</td>
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="5">No roster shifts for today.</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<h2>Recent Clock Events</h2>
+
+<table border="1" cellpadding="8">
+    <tr>
+        <th>Employee</th>
+        <th>Type</th>
+        <th>Timestamp</th>
+        <th>Method</th>
+    </tr>
+
+    {% for event in recent_events %}
+    <tr>
+        <td>{{ event.employee.name }}</td>
+        <td>{{ event.clock_type }}</td>
+        <td>{{ event.timestamp }}</td>
+        <td>{{ event.method }}</td>
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="4">No clock events yet.</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<p>
+    <a href="/manager/upload-roster/">Upload Roster</a> |
+    <a href="/export/clock-events/">Export Raw Clock Events CSV</a> |
+    <a href="/admin/">Admin</a>
+</p>
+
+</body>
+</html>
