@@ -9,7 +9,7 @@ from .views import (
     manager_weekly_summary,
     generate_test_clock_events,
     manager_daily_monitor,
-    manager_today_dashboard,
+    compliance_dashboard,
 )
 
 urlpatterns = [
@@ -21,5 +21,5 @@ urlpatterns = [
     path('manager/weekly-summary/', manager_weekly_summary, name='manager_weekly_summary'),
     path('manager/generate-test-events/', generate_test_clock_events, name='generate_test_clock_events'),
     path('manager/daily-monitor/', manager_daily_monitor, name='manager_daily_monitor'),
-    path('manager/today/', manager_today_dashboard, name='manager_today_dashboard'),
+    path('manager/compliance-dashboard/', compliance_dashboard, name='compliance_dashboard'),
 ]
