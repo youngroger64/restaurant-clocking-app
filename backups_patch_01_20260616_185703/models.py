@@ -25,7 +25,6 @@ class ClockEvent(models.Model):
     clock_type = models.CharField(max_length=20, choices=CLOCK_TYPES)
     timestamp = models.DateTimeField(default=timezone.now)
     method = models.CharField(max_length=20, default='QR')
-    notes = models.TextField(blank=True, default="")
 
     def __str__(self):
         return f"{self.employee.name} - {self.clock_type}"

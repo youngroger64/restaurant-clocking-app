@@ -13,7 +13,6 @@ from .views import (
     export_sage_payroll_csv,
     payroll_problems,
     manager_add_missing_event,
-    manager_fix_day,
     ManagerLoginView,
     manager_logout,
     manager_corrections,
@@ -35,6 +34,5 @@ urlpatterns = [
     path('manager/export-sage-payroll/', export_sage_payroll_csv, name='export_sage_payroll_csv'),
     path('manager/payroll-problems/', payroll_problems, name='payroll_problems'),
     path('manager/add-missing-event/', manager_add_missing_event, name='manager_add_missing_event'),
-    path('manager/fix-day/', manager_fix_day, name='manager_fix_day'),
     path('manager/corrections/', manager_corrections, name='manager_corrections'),
 ]

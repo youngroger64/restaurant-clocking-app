@@ -4,68 +4,90 @@
     <title>Staff Clocking</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f4f6f8; margin: 0; padding: 25px; color: #222; }
-        .box { max-width: 500px; margin: 30px auto; background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 24px; }
+        .box { max-width: 520px; margin: 30px auto; background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 24px; }
         input { width: 100%; padding: 12px; font-size: 18px; margin-top: 5px; box-sizing: border-box; }
         button { width: 100%; padding: 14px; margin: 8px 0; font-size: 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
         .in { background: #2563eb; color: white; }
         .break { background: #f59e0b; color: black; }
         .out { background: #4b5563; color: white; }
+        .secondary { background: #e5e7eb; color: #111827; }
         .message { margin-top: 18px; padding: 12px; background: #eef5ff; border-left: 4px solid #2563eb; }
-        .state { padding: 14px; background: #f9fafb; border-radius: 8px; margin: 12px 0; font-size: 18px; }
+        .state { padding: 16px; background: #f9fafb; border-radius: 8px; margin: 12px 0; font-size: 18px; line-height: 1.5; }
         .confirm { background: #fff7ed; padding: 12px; border-left: 4px solid #f59e0b; margin: 12px 0; }
         .small { color: #666; font-size: 14px; }
+        .name { font-size: 26px; font-weight: bold; margin-bottom: 6px; }
+        .status { font-size: 22px; margin-bottom: 8px; }
+        .top-actions { margin-top: 12px; }
+        a { color: #2563eb; }
     </style>
 </head>
 <body>
 <div class="box">
 <h1>Staff Clocking</h1>
-<p class="small">Enter your employee number and PIN. Only valid options are shown.</p>
 
-<form method="post">
-    {% csrf_token %}
-    <p><strong>Employee Number</strong><br><input type="text" name="employee_number" required></p>
-    <p><strong>PIN</strong><br><input type="password" name="pin" required></p>
+{% if employee %}
+    <div class="state">
+        <div class="name">{{ employee.name }}</div>
+        <div class="status">{{ state.status_label }}</div>
 
-    {% if employee %}
-        <div class="state">
-            <strong>{{ employee.name }}</strong><br>
-            Status: <strong>{{ state.status_label }}</strong><br>
-            {% if state.clocked_in_time %}
-                Clocked in: {{ state.clocked_in_time|date:"H:i" }}<br>
-            {% endif %}
-            {% if state.break_started_time %}
-                Break started: {{ state.break_started_time|date:"H:i" }}<br>
-            {% endif %}
-            Worked today: {{ state.worked_hours }}h<br>
-            Break today: {{ state.break_minutes }} mins
-        </div>
-    {% endif %}
-
-    {% if "IN" in state.valid_actions or not employee %}
-        <button class="in" type="submit" name="action" value="IN">Clock In</button>
-    {% endif %}
-
-    {% if "BREAK_START" in state.valid_actions %}
-        <button class="break" type="submit" name="action" value="BREAK_START">Start Break</button>
-    {% endif %}
-
-    {% if "BREAK_END" in state.valid_actions %}
-        <button class="break" type="submit" name="action" value="BREAK_END">End Break</button>
-    {% endif %}
-
-    {% if "OUT" in state.valid_actions %}
-        {% if state.current_state == "ON_BREAK" %}
-            <div class="confirm">
-                You are currently on break. If you clock out now, the system will end your break and clock you out.
-                <br>
-                <label><input type="checkbox" name="confirm_break_clockout" value="yes" style="width:auto;"> I understand</label>
-            </div>
+        {% if state.clocked_in_time %}
+            Clocked in: <strong>{{ state.clocked_in_time|date:"H:i" }}</strong><br>
         {% endif %}
-        <button class="out" type="submit" name="action" value="OUT">Clock Out</button>
-    {% endif %}
-</form>
+        {% if state.break_started_time %}
+            Break started: <strong>{{ state.break_started_time|date:"H:i" }}</strong><br>
+        {% endif %}
+
+        Worked today: <strong>{{ state.worked_hours }}h</strong><br>
+        Break today: <strong>{{ state.break_minutes }} mins</strong>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        {% if "IN" in state.valid_actions %}
+            <button class="in" type="submit" name="action" value="IN">Clock In</button>
+        {% endif %}
+
+        {% if "BREAK_START" in state.valid_actions %}
+            <button class="break" type="submit" name="action" value="BREAK_START">Start Break</button>
+        {% endif %}
+
+        {% if "BREAK_END" in state.valid_actions %}
+            <button class="break" type="submit" name="action" value="BREAK_END">End Break</button>
+        {% endif %}
+
+        {% if "OUT" in state.valid_actions %}
+            {% if state.current_state == "ON_BREAK" %}
+                <div class="confirm">
+                    You are currently on break.<br>
+                    If you clock out now, the system will end your break and clock you out.
+                    <br><br>
+                    <label><input type="checkbox" name="confirm_break_clockout" value="yes" style="width:auto;"> I understand</label>
+                </div>
+            {% endif %}
+            <button class="out" type="submit" name="action" value="OUT">Clock Out</button>
+        {% endif %}
+    </form>
+
+    <form method="post" class="top-actions">
+        {% csrf_token %}
+        <input type="hidden" name="reset_clock_session" value="yes">
+        <button class="secondary" type="submit">Not {{ employee.name }}? Start again</button>
+    </form>
+
+{% else %}
+    <p class="small">Enter your employee number and PIN once. This screen will then remember you on this device/browser session.</p>
+
+    <form method="post">
+        {% csrf_token %}
+        <p><strong>Employee Number</strong><br><input type="text" name="employee_number" required autofocus></p>
+        <p><strong>PIN</strong><br><input type="password" name="pin" required></p>
+        <button class="in" type="submit">Continue</button>
+    </form>
+{% endif %}
 
 {% if message %}<div class="message"><strong>{{ message }}</strong></div>{% endif %}
+
 <p><a href="/">Home</a></p>
 </div>
 </body>

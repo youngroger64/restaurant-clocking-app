@@ -58,9 +58,8 @@ def clock_page(request):
                 ClockEvent.objects.create(
                     employee=employee,
                     clock_type=action,
-                    method="QR",
-        notes="",
-    )
+                    method="QR"
+                )
 
                 message = f"{employee.name} {action_labels[action]} successfully."
 
@@ -283,17 +282,15 @@ def generate_test_clock_events(request):
             employee=shift.employee,
             clock_type="IN",
             timestamp=clock_in_time,
-            method="TEST",
-        notes="",
-    )
+            method="TEST"
+        )
 
         ClockEvent.objects.create(
             employee=shift.employee,
             clock_type="OUT",
             timestamp=clock_out_time,
-            method="TEST",
-        notes="",
-    )
+            method="TEST"
+        )
 
         count += 2
 
@@ -1144,28 +1141,6 @@ def manager_today_dashboard(request):
     urgent_rows = [row for row in rows if row["is_urgent"]]
     operational_rows = [row for row in rows if row["is_operational"]]
     working_rows = [row for row in rows if row["is_working"]]
-    needs_attention_rows = urgent_rows + operational_rows
-
-    late_count = sum(
-        1 for row in needs_attention_rows
-        if "late" in row.get("issue", "").lower()
-    )
-
-    not_arrived_count = sum(
-        1 for row in needs_attention_rows
-        if (
-            "not arrived" in row.get("issue", "").lower()
-            or "absent" in row.get("issue", "").lower()
-            or "no clock-in" in row.get("issue", "").lower()
-        )
-    )
-
-    payroll_issues_count = len(urgent_rows)
-    rostered_count = sum(1 for row in rows if row["rostered"])
-    payroll_ready = 100
-    if rostered_count > 0:
-        payroll_ready = max(0, min(100, round(((rostered_count - payroll_issues_count) / rostered_count) * 100)))
-
 
     return render(request, "manager_today.html", {
         "selected_date": selected_date,
@@ -1173,12 +1148,7 @@ def manager_today_dashboard(request):
         "urgent_rows": urgent_rows,
         "operational_rows": operational_rows,
         "working_rows": working_rows,
-        "needs_attention_rows": needs_attention_rows,
-        "late_count": late_count,
-        "not_arrived_count": not_arrived_count,
-        "payroll_issues_count": payroll_issues_count,
-        "payroll_ready": payroll_ready,
-        "rostered_count": rostered_count,
+        "rostered_count": sum(1 for row in rows if row["rostered"]),
         "currently_working": len(working_rows),
         "on_break": sum(1 for row in rows if row["is_on_break"]),
         "clocked_out": sum(1 for row in rows if row["is_clocked_out"]),
@@ -1297,13 +1267,9 @@ def smart_clock_page(request):
                     message = "You are currently on break. Tick the confirmation box to clock out."
                 else:
                     if current_state == "ON_BREAK" and action == "OUT":
-                        ClockEvent.objects.create(employee=employee, clock_type="BREAK_END", method="QR_AUTO",
-        notes="",
-    )
+                        ClockEvent.objects.create(employee=employee, clock_type="BREAK_END", method="QR_AUTO")
 
-                    ClockEvent.objects.create(employee=employee, clock_type=action, method="QR",
-        notes="",
-    )
+                    ClockEvent.objects.create(employee=employee, clock_type=action, method="QR")
                     message = f"{employee.name}: {labels[action]} recorded successfully."
 
                     latest = _latest_today_event(employee)
@@ -1499,11 +1465,6 @@ def _clock_state_for_employee(employee):
 
 
 def smart_clock_page(request):
-    # Staff clocking page:
-    # - identify once with employee number + PIN
-    # - store employee id in browser session
-    # - allow further actions without re-entering PIN
-    # - allow clearing session with 'Not you? Start again'
     message = ""
     employee = None
     state = {
@@ -1523,86 +1484,54 @@ def smart_clock_page(request):
         "OUT": "👋 {name} clocked out successfully at {time}.",
     }
 
-    if request.method == "POST" and request.POST.get("reset_clock_session") == "yes":
-        request.session.pop("clock_employee_id", None)
-        message = "Session cleared. Please enter your employee number and PIN."
-        return render(request, "clock.html", {
-            "message": message,
-            "employee": None,
-            "state": state,
-        })
-
-    session_employee_id = request.session.get("clock_employee_id")
-    if session_employee_id:
-        try:
-            employee = Employee.objects.get(id=session_employee_id, active=True)
-            state = _clock_state_for_employee(employee)
-        except Employee.DoesNotExist:
-            request.session.pop("clock_employee_id", None)
-            employee = None
-
     if request.method == "POST":
+        emp_no = request.POST.get("employee_number")
+        pin = request.POST.get("pin")
         action = request.POST.get("action")
         confirm_break_clockout = request.POST.get("confirm_break_clockout")
 
-        if employee is None:
-            emp_no = (request.POST.get("employee_number") or "").strip()
-            pin = (request.POST.get("pin") or "").strip()
-
-            if not emp_no or not pin:
-                message = "Please enter your employee number and PIN."
-            else:
-                try:
-                    employee = Employee.objects.get(employee_number=emp_no, pin=pin, active=True)
-                    request.session["clock_employee_id"] = employee.id
-                    request.session.modified = True
-                    state = _clock_state_for_employee(employee)
-                    if not action:
-                        message = f"Welcome {employee.name}. Choose an option below."
-                except Employee.DoesNotExist:
-                    message = "Invalid employee number or PIN."
-                    employee = None
-
-        if employee is not None and action:
+        try:
+            employee = Employee.objects.get(employee_number=emp_no, pin=pin, active=True)
             state = _clock_state_for_employee(employee)
 
-            if action not in state["valid_actions"]:
-                message = "That action is not available for your current status."
+            if action:
+                if action not in state["valid_actions"]:
+                    message = "That action is not available for your current status."
 
-            elif state["current_state"] == "ON_BREAK" and action == "OUT" and confirm_break_clockout != "yes":
-                message = "You are currently on break. Tick the confirmation box to clock out."
+                elif state["current_state"] == "ON_BREAK" and action == "OUT" and confirm_break_clockout != "yes":
+                    message = "You are currently on break. Tick the confirmation box to clock out."
 
-            else:
-                now = timezone.localtime()
+                else:
+                    now = timezone.localtime()
 
-                if state["current_state"] == "ON_BREAK" and action == "OUT":
+                    if state["current_state"] == "ON_BREAK" and action == "OUT":
+                        ClockEvent.objects.create(
+                            employee=employee,
+                            clock_type="BREAK_END",
+                            method="QR_AUTO"
+                        )
+
                     ClockEvent.objects.create(
                         employee=employee,
-                        clock_type="BREAK_END",
-                        method="QR_AUTO",
-                        notes="Auto-ended break because employee clocked out while on break.",
+                        clock_type=action,
+                        method="QR"
                     )
 
-                ClockEvent.objects.create(
-                    employee=employee,
-                    clock_type=action,
-                    method="QR",
-                    notes="",
-                )
+                    message = action_messages[action].format(
+                        name=employee.name,
+                        time=now.strftime("%H:%M")
+                    )
 
-                message = action_messages[action].format(
-                    name=employee.name,
-                    time=now.strftime("%H:%M")
-                )
+                    state = _clock_state_for_employee(employee)
 
-                state = _clock_state_for_employee(employee)
+        except Employee.DoesNotExist:
+            message = "Invalid employee number or PIN."
 
     return render(request, "clock.html", {
         "message": message,
         "employee": employee,
         "state": state,
     })
-
 
 
 class ManagerLoginView(LoginView):
@@ -1732,9 +1661,8 @@ def manager_corrections(request):
                     employee=employee,
                     clock_type=clock_type,
                     timestamp=event_dt,
-                    method="MANAGER",
-        notes="",
-    )
+                    method="MANAGER"
+                )
 
                 message = f"Added {clock_type} for {employee.name} at {event_time}."
 
@@ -1812,186 +1740,3 @@ def home_page(request):
         "health_score": health_score,
         "payroll_problem_count": len(payroll_problem_rows),
     })
-
-# -------------------------------------------------------------------
-# Delivery patch 01: row-level payroll corrections + safer payroll export
-# -------------------------------------------------------------------
-
-from django.contrib.auth.decorators import login_required as _patch_login_required
-from django.shortcuts import get_object_or_404 as _patch_get_object_or_404
-from django.http import HttpResponseRedirect as _patch_HttpResponseRedirect
-from core.compliance import calculate_employee_day as _patch_calculate_employee_day
-from core.compliance import get_week_rows as _patch_get_week_rows
-
-
-def _patch_current_week_start():
-    today = timezone.localdate()
-    return today - timedelta(days=today.weekday())
-
-
-def _patch_parse_week_start(request):
-    raw = request.GET.get("week_start") or request.POST.get("week_start")
-    if raw:
-        return datetime.strptime(raw, "%Y-%m-%d").date()
-    return _patch_current_week_start()
-
-
-@_patch_login_required
-def manager_fix_day(request):
-    emp_no = request.GET.get("employee_number") or request.POST.get("employee_number")
-    date_raw = request.GET.get("event_date") or request.POST.get("event_date")
-    week_start = _patch_parse_week_start(request)
-
-    if not emp_no or not date_raw:
-        return render(request, "manager_fix_day.html", {
-            "error": "Missing employee number or date.",
-            "employee": None,
-            "event_date": None,
-            "events": [],
-            "day": {},
-            "week_start": week_start,
-        })
-
-    employee = _patch_get_object_or_404(Employee, employee_number=emp_no)
-    event_date = datetime.strptime(date_raw, "%Y-%m-%d").date()
-    message = ""
-    error = ""
-
-    if request.method == "POST":
-        mode = request.POST.get("mode")
-
-        if mode == "add":
-            clock_type = request.POST.get("clock_type")
-            event_time = request.POST.get("event_time")
-            reason = (request.POST.get("reason") or "").strip()
-
-            if clock_type not in ["IN", "BREAK_START", "BREAK_END", "OUT"]:
-                error = "Invalid event type."
-            elif not reason:
-                error = "A correction reason is required."
-            else:
-                naive_dt = datetime.strptime(f"{event_date} {event_time}", "%Y-%m-%d %H:%M")
-                event_dt = timezone.make_aware(naive_dt)
-                ClockEvent.objects.create(
-                    employee=employee,
-                    clock_type=clock_type,
-                    timestamp=event_dt,
-                    method="MANAGER",
-                    notes=f"Manager correction: {reason}",
-                )
-                message = f"Added {clock_type} for {employee.name} at {event_time}."
-
-        elif mode == "delete":
-            event_id = request.POST.get("event_id")
-            event = _patch_get_object_or_404(ClockEvent, id=event_id, employee=employee, timestamp__date=event_date)
-            old = f"{timezone.localtime(event.timestamp).strftime('%H:%M')} {event.clock_type}"
-            event.delete()
-            message = f"Deleted event: {old}."
-
-    events = list(ClockEvent.objects.filter(employee=employee, timestamp__date=event_date).order_by("timestamp"))
-    for event in events:
-        event.local_time = timezone.localtime(event.timestamp).strftime("H:%M").replace("H", "%H") if False else timezone.localtime(event.timestamp).strftime("%H:%M")
-
-    day = _patch_calculate_employee_day(employee, event_date, include_live=True)
-
-    return render(request, "manager_fix_day.html", {
-        "employee": employee,
-        "event_date": event_date,
-        "events": events,
-        "day": day,
-        "message": message,
-        "error": error,
-        "week_start": week_start,
-    })
-
-
-@_patch_login_required
-def payroll_problems(request):
-    week_start = _patch_parse_week_start(request)
-    week_end = week_start + timedelta(days=6)
-    rows = []
-
-    for employee in Employee.objects.filter(active=True).order_by("name"):
-        for i in range(7):
-            day = week_start + timedelta(days=i)
-            d = _patch_calculate_employee_day(employee, day, include_live=True)
-            problems = []
-
-            if d.get("missing_clock_out"):
-                problems.append("Missing clock-out")
-            if d.get("invalid_sequence"):
-                problems.append("Check clock sequence")
-            if d.get("is_urgent"):
-                problems.append(d.get("issue"))
-            if d.get("worked_hours", 0) > 12:
-                problems.append("Unusually long shift")
-
-            if problems:
-                rows.append({
-                    "date": day,
-                    "employee_number": employee.employee_number,
-                    "employee": employee.name,
-                    "roster": d.get("roster"),
-                    "status": d.get("status"),
-                    "worked_hours": d.get("worked_hours"),
-                    "break_minutes": d.get("break_minutes"),
-                    "problem": "; ".join(sorted(set([p for p in problems if p]))),
-                })
-
-    return render(request, "payroll_problems.html", {
-        "week_start": week_start,
-        "week_end": week_end,
-        "rows": rows,
-        "problem_count": len(rows),
-    })
-
-
-@_patch_login_required
-def manager_weekly_summary(request):
-    week_start = _patch_parse_week_start(request)
-    week_end = week_start + timedelta(days=6)
-    standard_hours = float(request.GET.get("standard_hours", "39"))
-    summary_rows = _patch_get_week_rows(week_start, standard_hours)
-
-    unresolved = [row for row in summary_rows if row.get("warning") != "OK"]
-
-    return render(request, "weekly_summary.html", {
-        "week_start": week_start,
-        "week_end": week_end,
-        "summary_rows": summary_rows,
-        "standard_hours": standard_hours,
-        "unresolved_problem_count": len(unresolved),
-    })
-
-
-@_patch_login_required
-def export_sage_payroll_csv(request):
-    week_start = _patch_parse_week_start(request)
-    period_number = request.GET.get("period", "1")
-    standard_hours = float(request.GET.get("standard_hours", "39"))
-    include_header = request.GET.get("include_header") == "1"
-    rows = _patch_get_week_rows(week_start, standard_hours)
-
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
-    writer = csv.writer(response)
-
-    # Sage Payroll IE single-timesheet import order:
-    # period number, employee number, 0000, payment element 1, payment element 2, payment element 3.
-    # Header is OFF by default because Sage imports usually expect raw rows only.
-    if include_header:
-        writer.writerow(["PeriodNumber", "EmployeeNumber", "0000", "NormalHours", "SundayHours", "OvertimeHours"])
-
-    for row in rows:
-        if row["paid_minutes"] == 0:
-            continue
-        writer.writerow([
-            period_number,
-            row["employee_number"],
-            "0000",
-            row["normal_hours"],
-            row["sunday_hours"],
-            row["overtime_hours"],
-        ])
-
-    return response

@@ -35,15 +35,6 @@ This page prepares payroll-style hours from clock records. Breaks are unpaid. Su
 
 <h2>{{ week_start }} to {{ week_end }}</h2>
 
-{% if unresolved_problem_count and unresolved_problem_count > 0 %}
-<div style="background:#fffbeb; border-left:4px solid #f59e0b; padding:12px; margin:12px 0;">
-    <strong>{{ unresolved_problem_count }} payroll warning(s) found.</strong>
-    Review Payroll Problems before exporting to Sage.
-    <a href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Open Payroll Problems</a>
-</div>
-{% endif %}
-
-
 <p>
     <a class="button" href="/manager/export-sage-payroll/?week_start={{ week_start|date:'Y-m-d' }}&period=1&standard_hours={{ standard_hours }}">
         Download Sage Payroll CSV
@@ -85,7 +76,6 @@ This page prepares payroll-style hours from clock records. Breaks are unpaid. Su
 </table>
 
 <p>
-    <a class="button secondary" href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Payroll Problems</a>
     <a class="button secondary" href="/manager/today/">Today's Dashboard</a>
     <a class="button secondary" href="/manager/upload-roster/">Upload Roster</a>
     <a class="button secondary" href="/">Home</a>
