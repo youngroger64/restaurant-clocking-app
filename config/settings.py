@@ -121,3 +121,15 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+
+EMAIL_HOST_USER = "aws4module@gmail.com"
+EMAIL_HOST_PASSWORD = "ofnt lnkl gmdg tnmn"
+
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+MANAGER_ALERT_EMAIL = "youngroger64@gmail.com"
+STATIC_ROOT = BASE_DIR / "staticfiles"

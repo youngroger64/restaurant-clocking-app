@@ -1,0 +1,10 @@
+[Unit]
+Description=Run restaurant manager email alerts every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=email-alert.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Restaurant Clocking Break Alert Check
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/restaurant_clocking
+Environment="PATH=/home/ec2-user/restaurant_clocking/venv/bin"
+# Add these four Environment lines after you create Twilio:
+# Environment="TWILIO_ACCOUNT_SID=your_sid"
+# Environment="TWILIO_AUTH_TOKEN=your_token"
+# Environment="TWILIO_FROM_NUMBER=+353..."
+# Environment="MANAGER_PHONE_NUMBER=+353..."
+ExecStart=/home/ec2-user/restaurant_clocking/venv/bin/python manage.py check_break_alerts

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run restaurant break-alert check every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=break-alert.service
+
+[Install]
+WantedBy=timers.target

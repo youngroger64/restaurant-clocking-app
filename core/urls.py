@@ -2,7 +2,7 @@ from django.urls import path
 
 from .views import (
     home_page,
-    clock_page,
+    smart_clock_page,
     export_clock_events_csv,
     upload_roster,
     manager_dashboard,
@@ -10,11 +10,19 @@ from .views import (
     generate_test_clock_events,
     manager_daily_monitor,
     manager_today_dashboard,
+    export_sage_payroll_csv,
+    payroll_problems,
+    manager_add_missing_event,
+    ManagerLoginView,
+    manager_logout,
 )
 
 urlpatterns = [
     path('', home_page, name='home'),
-    path('clock/', clock_page, name='clock'),
+    path('clock/', smart_clock_page, name='clock'),
+    path('manager/login/', ManagerLoginView.as_view(), name='manager_login'),
+    path('manager/logout/', manager_logout, name='manager_logout'),
+
     path('export/clock-events/', export_clock_events_csv, name='export_clock_events_csv'),
     path('manager/upload-roster/', upload_roster, name='upload_roster'),
     path('manager/dashboard/', manager_dashboard, name='manager_dashboard'),
@@ -22,4 +30,7 @@ urlpatterns = [
     path('manager/generate-test-events/', generate_test_clock_events, name='generate_test_clock_events'),
     path('manager/daily-monitor/', manager_daily_monitor, name='manager_daily_monitor'),
     path('manager/today/', manager_today_dashboard, name='manager_today_dashboard'),
+    path('manager/export-sage-payroll/', export_sage_payroll_csv, name='export_sage_payroll_csv'),
+    path('manager/payroll-problems/', payroll_problems, name='payroll_problems'),
+    path('manager/add-missing-event/', manager_add_missing_event, name='manager_add_missing_event'),
 ]
