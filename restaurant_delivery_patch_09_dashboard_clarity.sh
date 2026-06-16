@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "=== Restaurant Clocking Patch 09: Operational Dashboard Clarity ==="
+echo "Changes:"
+echo "  - Homepage cards are current-state only"
+echo "  - Late moved into Needs Attention"
+echo "  - First In renamed to Clocked In"
+echo "  - Payroll Ready % removed from landing page"
+echo
+
+if [ ! -f "manage.py" ]; then
+  echo "ERROR: Run this from Django project root: cd ~/restaurant_clocking"
+  exit 1
+fi
+
+stamp=$(date +%Y%m%d_%H%M%S)
+mkdir -p "patch_backups_09_$stamp"
+cp -f core/views.py "patch_backups_09_$stamp/views.py.before_patch09"
+cp -f templates/home.html "patch_backups_09_$stamp/home.html.before_patch09"
+cp -f templates/manager_today.html "patch_backups_09_$stamp/manager_today.html.before_patch09" 2>/dev/null || true
+
+cat > /tmp/patch09_views.py <<'PY'
+from pathlib import Path
+import re
+
+p = Path("core/views.py")
+s = p.read_text()
+
+new_home = '''def home_page(request):
+    # Restaurant Operations Dashboard landing page.
+    # Top cards are current-state only. Issues like late arrivals appear in Needs Attention.
+    from core.compliance import get_day_rows, get_week_rows
+
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+
+    rows = get_day_rows(today)
+    week_rows = get_week_rows(week_start, 39)
+
+    working_rows = [
+        row for row in rows
+        if row.get("is_working") or row.get("is_on_break")
+    ]
+
+    urgent_rows = [row for row in rows if row.get("is_urgent")]
+    operational_rows = [row for row in rows if row.get("is_operational")]
+    needs_attention_rows = urgent_rows + operational_rows
+
+    unrostered_rows = [
+        row for row in working_rows
+        if not row.get("rostered")
+    ]
+
+    rostered_count = sum(1 for row in rows if row.get("rostered"))
+    currently_working = sum(1 for row in rows if row.get("is_working"))
+    on_break = sum(1 for row in rows if row.get("is_on_break"))
+
+    not_arrived_count = sum(
+        1 for row in rows
+        if row.get("rostered")
+        and not row.get("has_activity")
+        and (
+            "not arrived" in row.get("issue", "").lower()
+            or "absent" in row.get("issue", "").lower()
+            or "no clock-in" in row.get("issue", "").lower()
+        )
+    )
+
+    late_count = sum(
+        1 for row in needs_attention_rows
+        if "late" in row.get("issue", "").lower()
+    )
+
+    payroll_problem_rows = [
+        row for row in week_rows
+        if row.get("warning") != "OK"
+    ]
+    payroll_issue_count = len(payroll_problem_rows)
+
+    return render(request, "home.html", {
+        "today": today,
+        "week_start": week_start,
+        "rows": rows,
+        "working_rows": working_rows,
+        "needs_attention_rows": needs_attention_rows[:8],
+        "unrostered_rows": unrostered_rows[:8],
+        "rostered_count": rostered_count,
+        "currently_working": currently_working,
+        "on_break": on_break,
+        "not_arrived_count": not_arrived_count,
+        "late_count": late_count,
+        "urgent_count": len(urgent_rows),
+        "operational_count": len(operational_rows),
+        "payroll_problem_count": payroll_issue_count,
+    })
+'''
+
+matches = list(re.finditer(r"^def home_page\(request\):", s, flags=re.M))
+if not matches:
+    raise SystemExit("Could not find home_page in core/views.py")
+
+start = matches[-1].start()
+m = re.search(r"\n(?=def |class |# -------------------------------------------------------------------)", s[start+1:])
+end = len(s) if not m else start + 1 + m.start()
+
+s = s[:start] + new_home + "\n\n" + s[end:]
+p.write_text(s)
+PY
+
+python3 /tmp/patch09_views.py
+
+cat > templates/home.html <<'HTML'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Restaurant Operations Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f8; margin: 0; padding: 25px; color: #111827; }
+        .container { max-width: 1250px; margin: auto; }
+        .header, .section { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 22px; margin-bottom: 18px; }
+        h1 { margin: 0 0 8px 0; font-size: 32px; }
+        h2 { margin: 0 0 8px 0; }
+        .muted { color: #666; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 18px 0; }
+        .card { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 18px; }
+        .card-title { font-size: 15px; }
+        .number { font-size: 36px; font-weight: bold; margin-top: 8px; }
+        .green { color: #1a7f37; font-weight: bold; }
+        .blue { color: #2563eb; font-weight: bold; }
+        .red { color: #b42318; font-weight: bold; }
+        .orange { color: #b7791f; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th, td { border-bottom: 1px solid #e5e7eb; padding: 11px; text-align: left; }
+        th { background: #f9fafb; }
+        .button { display: inline-block; padding: 11px 14px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 5px 8px 5px 0; }
+        .secondary { background: #4b5563; }
+        .danger { background: #b42318; }
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 13px; font-weight: bold; }
+        .badge-green { background: #dcfce7; color: #166534; }
+        .badge-blue { background: #dbeafe; color: #1d4ed8; }
+        .badge-orange { background: #ffedd5; color: #9a3412; }
+        .badge-red { background: #fee2e2; color: #991b1b; }
+        .summary { background: #f9fafb; padding: 12px; border-radius: 8px; margin-top: 10px; }
+        .actions { margin-top: 14px; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div class="header">
+        <h1>Restaurant Operations Dashboard</h1>
+        <p class="muted">
+            Today: {{ today|date:"F j, Y" }}.
+            Current staffing is shown first. Late arrivals and payroll problems appear under Needs Attention.
+        </p>
+        <div class="actions">
+            <a class="button" href="/clock/">Staff Clocking</a>
+            <a class="button" href="/manager/today/">Full Today View</a>
+            <a class="button secondary" href="/manager/upload-roster/">Upload Roster</a>
+            <a class="button secondary" href="/manager/weekly-summary/?week_start={{ week_start|date:'Y-m-d' }}">Weekly Payroll</a>
+        </div>
+    </div>
+
+    <div class="cards">
+        <div class="card">
+            <div class="card-title">📋 Rostered Today</div>
+            <div class="number">{{ rostered_count }}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">👥 Working</div>
+            <div class="number">{{ currently_working }}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">☕ On Break</div>
+            <div class="number orange">{{ on_break }}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">🚫 Not Arrived</div>
+            <div class="number {% if not_arrived_count > 0 %}red{% endif %}">{{ not_arrived_count }}</div>
+        </div>
+        <div class="card">
+            <div class="card-title">⚠ Payroll Issues</div>
+            <div class="number {% if payroll_problem_count > 0 %}red{% else %}green{% endif %}">{{ payroll_problem_count }}</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Staff Working Now</h2>
+        <p class="muted">
+            Blue means the staff member clocked in on time. Red means the person is currently working but arrived late.
+            Late arrivals are also listed in Needs Attention.
+        </p>
+        <table>
+            <tr>
+                <th>Employee</th>
+                <th>Status</th>
+                <th>Roster</th>
+                <th>Clocked In</th>
+                <th>Punctuality</th>
+                <th>Worked</th>
+                <th>Break</th>
+            </tr>
+            {% for row in working_rows %}
+            <tr>
+                <td>{{ row.employee }}</td>
+                <td>
+                    {% if row.is_on_break %}
+                        <span class="badge badge-orange">On Break</span>
+                    {% else %}
+                        <span class="badge badge-green">Working</span>
+                    {% endif %}
+                </td>
+                <td>{{ row.roster }}</td>
+                <td>{{ row.first_in }}</td>
+                <td>
+                    {% if "late" in row.issue|lower %}
+                        <span class="badge badge-red">Late</span>
+                    {% else %}
+                        <span class="badge badge-blue">On time</span>
+                    {% endif %}
+                </td>
+                <td>{{ row.worked_hours }}h</td>
+                <td>{{ row.break_minutes }} mins</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="muted">No staff are currently clocked in.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Needs Attention</h2>
+        <p class="muted">
+            This is where issues belong: late arrivals, absent staff, unrostered work, missed breaks, and payroll problems.
+        </p>
+        <table>
+            <tr>
+                <th>Employee</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Issue</th>
+                <th>Worked</th>
+                <th>Break</th>
+            </tr>
+            {% for row in needs_attention_rows %}
+            <tr>
+                <td>{{ row.employee }}</td>
+                <td>
+                    {% if row.is_urgent %}
+                        <span class="badge badge-red">Payroll</span>
+                    {% else %}
+                        <span class="badge badge-orange">Operational</span>
+                    {% endif %}
+                </td>
+                <td>{{ row.status }}</td>
+                <td class="{% if row.is_urgent %}red{% else %}orange{% endif %}">{{ row.issue }}</td>
+                <td>{{ row.worked_hours }}h</td>
+                <td>{{ row.break_minutes }} mins</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="green">No issues need attention.</td></tr>
+            {% endfor %}
+        </table>
+        <div class="actions">
+            <a class="button danger" href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Review Payroll Problems</a>
+            <a class="button secondary" href="/manager/corrections/">Manager Corrections</a>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Today Staffing Summary</h2>
+        <div class="summary">
+            <strong>Rostered today:</strong> {{ rostered_count }} &nbsp; | &nbsp;
+            <strong>Working:</strong> {{ currently_working }} &nbsp; | &nbsp;
+            <strong>On break:</strong> {{ on_break }} &nbsp; | &nbsp;
+            <strong>Not arrived:</strong> {{ not_arrived_count }} &nbsp; | &nbsp;
+            <strong>Late arrivals:</strong> {{ late_count }}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Payroll Status</h2>
+        <p>
+            {% if payroll_problem_count > 0 %}
+                <span class="red">⚠ {{ payroll_problem_count }} payroll issue{{ payroll_problem_count|pluralize }} need review before export.</span>
+            {% else %}
+                <span class="green">✓ Payroll looks ready for export.</span>
+            {% endif %}
+        </p>
+        <p class="muted">Payroll issues may include missing clock-outs, invalid clock sequences, long shifts, or unresolved corrections for the current week.</p>
+        <div class="actions">
+            <a class="button" href="/manager/weekly-summary/?week_start={{ week_start|date:'Y-m-d' }}">Open Weekly Payroll</a>
+            <a class="button secondary" href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Open Payroll Problems</a>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Staff Exceptions</h2>
+        <p class="muted">Less common exceptions, such as staff clocked in without being on today's roster.</p>
+        <table>
+            <tr>
+                <th>Employee</th>
+                <th>Status</th>
+                <th>Worked</th>
+                <th>Break</th>
+                <th>Issue</th>
+            </tr>
+            {% for row in unrostered_rows %}
+            <tr>
+                <td>{{ row.employee }}</td>
+                <td>{{ row.status }}</td>
+                <td>{{ row.worked_hours }}h</td>
+                <td>{{ row.break_minutes }} mins</td>
+                <td class="orange">Working but not rostered</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="green">No unrostered staff are currently working.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+</div>
+</body>
+</html>
+HTML
+
+if [ -f templates/manager_today.html ]; then
+python3 <<'PY'
+from pathlib import Path
+p = Path("templates/manager_today.html")
+s = p.read_text()
+s = s.replace("First In", "Clocked In")
+s = s.replace("Back from break", "Working")
+s = s.replace("Currently Working", "Staff Working Now")
+s = s.replace("Payroll Ready", "Payroll Status")
+p.write_text(s)
+PY
+fi
+
+echo "Checking Python syntax..."
+python -m py_compile core/views.py
+
+echo "Running Django checks..."
+python manage.py check
+
+echo
+echo "Patch 09 complete."
+echo "Restart:"
+echo "  sudo systemctl restart restaurant_clocking"
