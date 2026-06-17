@@ -1511,110 +1511,111 @@ def manager_fix_day(request):
     })
 
 
+def _patch_payroll_problem_rows(week_start):
+    """
+    Single source of truth for payroll problems.
+
+    The weekly payroll page, payroll problems page, and Sage export safety
+    must all use this function. Otherwise the manager can see "2 issues" on
+    Weekly Payroll, click through, and see "No payroll problems found".
+    """
+    rows = []
+
+    for employee in Employee.objects.filter(active=True).order_by("name"):
+        for i in range(7):
+            day = week_start + timedelta(days=i)
+            d = _patch_calculate_employee_day(employee, day, include_live=True)
+            problems = []
+
+            if d.get("missing_clock_out"):
+                problems.append("Missing clock-out")
+            if d.get("invalid_sequence"):
+                problems.append("Check clock events")
+            if d.get("is_urgent"):
+                issue = d.get("issue")
+                if issue and issue != "OK":
+                    problems.append(issue)
+            if d.get("worked_hours", 0) > 12:
+                problems.append("Unusually long shift")
+
+            # Do not show duplicate wording in the manager-facing problem list.
+            clean = []
+            for item in problems:
+                if item and item not in clean:
+                    clean.append(item)
+
+            if clean:
+                rows.append({
+                    "date": day,
+                    "employee_number": employee.employee_number,
+                    "employee": employee.name,
+                    "roster": d.get("roster"),
+                    "status": d.get("status"),
+                    "worked_hours": d.get("worked_hours"),
+                    "break_minutes": d.get("break_minutes"),
+                    "problem": "; ".join(clean),
+                })
+
+    return rows
+
+
 @_patch_login_required
 def payroll_problems(request):
-    # Manager-focused issue review.
-    # Not every issue is a payroll blocker.
-    from core.compliance import get_week_rows
-
     week_start = _patch_parse_week_start(request)
     week_end = week_start + timedelta(days=6)
-
-    rows = get_week_rows(week_start, 39)
-    issue_rows = [row for row in rows if row.get("warning") != "OK"]
-
-    payroll_blockers = []
-    attendance_issues = []
-    roster_exceptions = []
-
-    for row in issue_rows:
-        issue = row.get("warning") or row.get("issue") or ""
-        issue_l = issue.lower()
-        row["issue_text"] = issue
-
-        if (
-            "rostered but absent" in issue_l
-            or "not arrived" in issue_l
-            or "didn't clock in" in issue_l
-            or "did not clock in" in issue_l
-        ):
-            row["category"] = "Attendance"
-            row["manager_explanation"] = "This affects staffing, but payroll can calculate 0 worked hours unless leave is paid."
-            attendance_issues.append(row)
-
-        elif (
-            "working but not rostered" in issue_l
-            or "not rostered" in issue_l
-        ):
-            row["category"] = "Roster Exception"
-            row["manager_explanation"] = "The hours can be calculated, but the manager should confirm this was approved cover or add it to the roster."
-            roster_exceptions.append(row)
-
-        else:
-            row["category"] = "Payroll"
-            row["manager_explanation"] = "Clock records need review before payroll export."
-            payroll_blockers.append(row)
+    rows = _patch_payroll_problem_rows(week_start)
 
     return render(request, "payroll_problems.html", {
         "week_start": week_start,
         "week_end": week_end,
-        "rows": issue_rows,
-        "payroll_blockers": payroll_blockers,
-        "attendance_issues": attendance_issues,
-        "roster_exceptions": roster_exceptions,
-        "payroll_blocker_count": len(payroll_blockers),
-        "attendance_issue_count": len(attendance_issues),
-        "roster_exception_count": len(roster_exceptions),
-        "total_issue_count": len(issue_rows),
+        "rows": rows,
+        "problem_count": len(rows),
     })
 
 
-
+@_patch_login_required
 def manager_weekly_summary(request):
     week_start = _patch_parse_week_start(request)
     week_end = week_start + timedelta(days=6)
     standard_hours = float(request.GET.get("standard_hours", "39"))
     summary_rows = _patch_get_week_rows(week_start, standard_hours)
 
-    unresolved = [row for row in summary_rows if row.get("warning") != "OK"]
+    # Important: this count must match the Payroll Problems page exactly.
+    payroll_problem_rows = _patch_payroll_problem_rows(week_start)
 
     return render(request, "weekly_summary.html", {
         "week_start": week_start,
         "week_end": week_end,
         "summary_rows": summary_rows,
         "standard_hours": standard_hours,
-        "unresolved_problem_count": len(unresolved),
+        "unresolved_problem_count": len(payroll_problem_rows),
     })
 
 
 @_patch_login_required
 def export_sage_payroll_csv(request):
     week_start = _patch_parse_week_start(request)
-    week_end = week_start + timedelta(days=6)
     period_number = request.GET.get("period", "1")
     standard_hours = float(request.GET.get("standard_hours", "39"))
     include_header = request.GET.get("include_header") == "1"
-    force_export = request.GET.get("force") == "1"
-    rows = _patch_get_week_rows(week_start, standard_hours)
+    allow_unresolved = request.GET.get("allow_unresolved") == "1"
 
-    unresolved_rows = [row for row in rows if row.get("warning") != "OK"]
-
-    # Production safety: do not silently export payroll when the manager still has
-    # warnings to review. The manager can still force an export, but only after
-    # seeing a clear warning page.
-    if unresolved_rows and not force_export:
-        return render(request, "sage_export_review.html", {
+    payroll_problem_rows = _patch_payroll_problem_rows(week_start)
+    if payroll_problem_rows and not allow_unresolved:
+        week_end = week_start + timedelta(days=6)
+        return render(request, "payroll_export_blocked.html", {
             "week_start": week_start,
             "week_end": week_end,
-            "period_number": period_number,
+            "problem_count": len(payroll_problem_rows),
+            "problems": payroll_problem_rows,
             "standard_hours": standard_hours,
-            "unresolved_rows": unresolved_rows,
-            "unresolved_count": len(unresolved_rows),
+            "period_number": period_number,
         })
 
-    filename = f"sage_payroll_{week_start.strftime('%Y_%m_%d')}.csv"
+    rows = _patch_get_week_rows(week_start, standard_hours)
+
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
     writer = csv.writer(response)
 
     # Sage Payroll IE single-timesheet import order:
@@ -1636,6 +1637,7 @@ def export_sage_payroll_csv(request):
         ])
 
     return response
+
 
 # Final manager view protection - must stay at end
 manager_today_dashboard = login_required(manager_today_dashboard)
