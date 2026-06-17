@@ -93,43 +93,182 @@ def export_clock_events_csv(request):
 
 
 def upload_roster(request):
+    """Manager roster upload and review.
+
+    Production rule:
+    - uploading a CSV replaces roster shifts for the uploaded week
+    - clock records are never deleted by roster upload
+    - rows are validated before anything is deleted
+    """
     message = ""
+    error = ""
 
-    if request.method == "POST":
-        roster_file = request.FILES.get("roster_file")
+    def _parse_date(value):
+        value = (value or "").strip()
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                pass
+        raise ValueError(f"Invalid date '{value}'. Use YYYY-MM-DD or DD/MM/YYYY.")
 
-        if roster_file:
-            decoded_file = roster_file.read().decode("utf-8").splitlines()
+    def _parse_time(value):
+        value = (value or "").strip()
+        for fmt in ("%H:%M", "%H:%M:%S"):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                pass
+        raise ValueError(f"Invalid time '{value}'. Use HH:MM.")
+
+    def _week_start_for(day):
+        return day - timedelta(days=day.weekday())
+
+    raw_week_start = request.GET.get("week_start") or request.POST.get("week_start")
+    if raw_week_start:
+        try:
+            week_start = _parse_date(raw_week_start)
+            week_start = _week_start_for(week_start)
+        except Exception:
+            week_start = timezone.localdate() - timedelta(days=timezone.localdate().weekday())
+    else:
+        week_start = timezone.localdate() - timedelta(days=timezone.localdate().weekday())
+    week_end = week_start + timedelta(days=6)
+
+    if request.method == "POST" and request.FILES.get("roster_file"):
+        roster_file = request.FILES["roster_file"]
+        try:
+            decoded_file = roster_file.read().decode("utf-8-sig").splitlines()
             reader = csv.DictReader(decoded_file)
 
-            count = 0
+            required = {"EmployeeNumber", "EmployeeName", "Date", "StartTime", "EndTime"}
+            missing = required - set(reader.fieldnames or [])
+            if missing:
+                raise ValueError("Missing CSV columns: " + ", ".join(sorted(missing)))
 
-            for row in reader:
-                emp_no = row["EmployeeNumber"].strip()
-                name = row["EmployeeName"].strip()
+            parsed_rows = []
+            row_errors = []
+            for line_no, row in enumerate(reader, start=2):
+                try:
+                    emp_no = (row.get("EmployeeNumber") or "").strip()
+                    emp_name = (row.get("EmployeeName") or "").strip()
+                    if not emp_no:
+                        raise ValueError("EmployeeNumber is blank")
+                    if not emp_name:
+                        raise ValueError("EmployeeName is blank")
 
+                    shift_date = _parse_date(row.get("Date"))
+                    start_time = _parse_time(row.get("StartTime"))
+                    end_time = _parse_time(row.get("EndTime"))
+                    if start_time == end_time:
+                        raise ValueError("Start and end time are the same")
+
+                    raw_break = (row.get("BreakMinutes") or "0").strip()
+                    break_minutes = int(raw_break or 0)
+                    if break_minutes < 0:
+                        raise ValueError("BreakMinutes cannot be negative")
+
+                    parsed_rows.append({
+                        "employee_number": emp_no,
+                        "employee_name": emp_name,
+                        "shift_date": shift_date,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "break_minutes": break_minutes,
+                    })
+                except Exception as exc:
+                    row_errors.append(f"Row {line_no}: {exc}")
+
+            if row_errors:
+                raise ValueError("Roster upload has errors:
+" + "
+".join(row_errors[:20]))
+            if not parsed_rows:
+                raise ValueError("The CSV did not contain any roster rows.")
+
+            weeks = {_week_start_for(r["shift_date"]) for r in parsed_rows}
+            if len(weeks) != 1:
+                raise ValueError("Upload one roster week at a time. The CSV contains multiple weeks.")
+
+            week_start = weeks.pop()
+            week_end = week_start + timedelta(days=6)
+
+            # Validate duplicates inside the file before deleting existing roster rows.
+            seen = set()
+            duplicates = []
+            for r in parsed_rows:
+                key = (r["employee_number"], r["shift_date"], r["start_time"], r["end_time"])
+                if key in seen:
+                    duplicates.append(f"{r['employee_number']} {r['shift_date']} {r['start_time']}-{r['end_time']}")
+                seen.add(key)
+            if duplicates:
+                raise ValueError("Duplicate shifts in CSV: " + "; ".join(duplicates[:10]))
+
+            # Production behaviour: replace the roster for this week only.
+            # Clock events are deliberately left untouched.
+            deleted_count, _ = RosterShift.objects.filter(
+                shift_date__gte=week_start,
+                shift_date__lte=week_end,
+            ).delete()
+
+            created_count = 0
+            employees_created = 0
+            employees_updated = 0
+            for r in parsed_rows:
                 employee, created = Employee.objects.get_or_create(
-                    employee_number=emp_no,
+                    employee_number=r["employee_number"],
                     defaults={
-                        "name": name,
-                        "pin": emp_no,
+                        "name": r["employee_name"],
+                        "pin": r["employee_number"],
                         "active": True,
-                    }
+                    },
                 )
+                if created:
+                    employees_created += 1
+                else:
+                    changed = False
+                    if employee.name != r["employee_name"]:
+                        employee.name = r["employee_name"]
+                        changed = True
+                    if not employee.active:
+                        employee.active = True
+                        changed = True
+                    if changed:
+                        employee.save()
+                        employees_updated += 1
 
                 RosterShift.objects.create(
                     employee=employee,
-                    shift_date=datetime.strptime(row["Date"], "%Y-%m-%d").date(),
-                    start_time=datetime.strptime(row["StartTime"], "%H:%M").time(),
-                    end_time=datetime.strptime(row["EndTime"], "%H:%M").time(),
-                    break_minutes=int(row["BreakMinutes"]),
+                    shift_date=r["shift_date"],
+                    start_time=r["start_time"],
+                    end_time=r["end_time"],
+                    break_minutes=r["break_minutes"],
                 )
+                created_count += 1
 
-                count += 1
+            message = (
+                f"Roster imported for {week_start.strftime('%d/%m/%Y')} - {week_end.strftime('%d/%m/%Y')}. "
+                f"Replaced {deleted_count} old shift(s). Added {created_count} shift(s). "
+                f"Created {employees_created} employee(s). Updated {employees_updated} employee(s). "
+                "Clock records were not changed."
+            )
+        except Exception as exc:
+            error = str(exc)
 
-            message = f"Uploaded {count} roster shifts."
+    employees = Employee.objects.filter(active=True).order_by("name")
+    shifts = RosterShift.objects.select_related("employee").filter(
+        shift_date__gte=week_start,
+        shift_date__lte=week_end,
+    ).order_by("shift_date", "start_time", "employee__name")
 
-    return render(request, "upload_roster.html", {"message": message})
+    return render(request, "upload_roster.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "employees": employees,
+        "shifts": shifts,
+        "message": message,
+        "error": error,
+    })
 
 
 def manager_dashboard(request):
