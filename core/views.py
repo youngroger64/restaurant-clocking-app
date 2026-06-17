@@ -180,9 +180,7 @@ def upload_roster(request):
                     row_errors.append(f"Row {line_no}: {exc}")
 
             if row_errors:
-                raise ValueError("Roster upload has errors:
-" + "
-".join(row_errors[:20]))
+                raise ValueError("Roster upload has errors:\n" + "\n".join(row_errors[:20]))
             if not parsed_rows:
                 raise ValueError("The CSV did not contain any roster rows.")
 
