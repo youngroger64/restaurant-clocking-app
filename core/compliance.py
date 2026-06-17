@@ -179,6 +179,15 @@ def calculate_employee_day(employee, selected_date, include_live=True):
     events = _events_for_operational_day(employee, selected_date)
     roster = get_roster_info(employee, selected_date)
 
+    # Live screens must not be affected by future demo/manager events.
+    # Example: if a demo OUT exists for 19:00 but it is only 12:55 now,
+    # the staff member should still appear as Working/On Break on the dashboard.
+    # Payroll/full-day review can still call include_live=False to use the whole day.
+    now = timezone.now()
+    today = current_operational_date()
+    if include_live and selected_date == today:
+        events = events.filter(timestamp__lte=now)
+
     first_in = None
     last_out = None
     latest_event = events.last()
@@ -227,8 +236,6 @@ def calculate_employee_day(employee, selected_date, include_live=True):
             else:
                 invalid_sequence = True
 
-    now = timezone.now()
-    today = current_operational_date()
     currently_open_work = work_start is not None
     currently_open_break = break_start is not None
 
