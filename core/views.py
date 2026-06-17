@@ -975,15 +975,23 @@ from django.urls import reverse_lazy
 
 def _clock_state_for_employee(employee):
     today = timezone.localdate()
+    now = timezone.now()
+
+    # Staff clocking must reflect what has happened up to this moment only.
+    # Manager corrections, demo data, or roster simulations may contain later events
+    # for today. If we include future events here, a staff member can press Clock In
+    # and still appear Clocked Out because a later OUT already exists in the day.
     latest = ClockEvent.objects.filter(
         employee=employee,
-        timestamp__date=today
-    ).order_by("-timestamp").first()
+        timestamp__date=today,
+        timestamp__lte=now,
+    ).order_by("-timestamp", "-id").first()
 
     events = ClockEvent.objects.filter(
         employee=employee,
-        timestamp__date=today
-    ).order_by("timestamp")
+        timestamp__date=today,
+        timestamp__lte=now,
+    ).order_by("timestamp", "id")
 
     current_state = "CLOCKED_OUT"
     status_label = "⚫ Clocked Out"
@@ -1038,7 +1046,6 @@ def _clock_state_for_employee(employee):
                 break_start = None
             break_started_time = None
 
-    now = timezone.now()
     if current_state == "WORKING" and work_start:
         worked_minutes += int((now - work_start).total_seconds() / 60)
     elif current_state == "ON_BREAK" and break_start:

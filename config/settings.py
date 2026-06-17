@@ -151,3 +151,9 @@ LOGGING = {
         "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
     },
 }
+
+
+# Manager login route used by protected manager/payroll pages.
+LOGIN_URL = '/manager/login/'
+LOGIN_REDIRECT_URL = '/manager/today/'
+LOGOUT_REDIRECT_URL = '/manager/login/'
