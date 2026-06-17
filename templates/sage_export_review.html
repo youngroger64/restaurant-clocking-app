@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Review Before Sage Export</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f8; margin: 0; padding: 25px; color: #222; }
+        .container { max-width: 1150px; margin: auto; background: white; padding: 24px; border-radius: 14px; border: 1px solid #e5e7eb; }
+        .warning { background: #fffbeb; border-left: 5px solid #f59e0b; padding: 14px; margin: 14px 0; }
+        .danger { background: #fee2e2; border-left: 5px solid #dc2626; padding: 14px; margin: 14px 0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; vertical-align: top; }
+        th { background: #f9fafb; }
+        .button { display: inline-block; padding: 10px 13px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 5px 8px 5px 0; }
+        .secondary { background: #4b5563; }
+        .danger-button { background: #b42318; }
+        .muted { color: #6b7280; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Review Before Sage Export</h1>
+
+    <div class="danger">
+        <strong>{{ unresolved_count }} payroll warning(s) found for {{ week_start }} to {{ week_end }}.</strong><br>
+        A manager should review these before downloading the Sage CSV.
+    </div>
+
+    <p>This protects payroll from missed clock-outs, unusual hours, or roster mismatches being exported by mistake.</p>
+
+    <p>
+        <a class="button" href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Fix Payroll Problems</a>
+        <a class="button secondary" href="/manager/weekly-summary/?week_start={{ week_start|date:'Y-m-d' }}&standard_hours={{ standard_hours }}">Back to Weekly Payroll</a>
+    </p>
+
+    <h2>Warnings to Review</h2>
+    <table>
+        <tr>
+            <th>Employee No</th>
+            <th>Employee</th>
+            <th>Rostered</th>
+            <th>Paid Hours</th>
+            <th>Difference</th>
+            <th>Status</th>
+        </tr>
+        {% for row in unresolved_rows %}
+        <tr>
+            <td>{{ row.employee_number }}</td>
+            <td>{{ row.employee }}</td>
+            <td>{{ row.rostered_hours }}</td>
+            <td>{{ row.paid_hours }}</td>
+            <td>{{ row.difference }}</td>
+            <td>{{ row.warning }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <div class="warning">
+        <strong>Manager override:</strong> only use this if you have checked the warnings and still want the file now.
+    </div>
+
+    <p>
+        <a class="button danger-button" href="/manager/export-sage-payroll/?week_start={{ week_start|date:'Y-m-d' }}&period={{ period_number }}&standard_hours={{ standard_hours }}&force=1">Download Anyway</a>
+    </p>
+</div>
+</body>
+</html>

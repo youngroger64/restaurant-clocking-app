@@ -1583,13 +1583,31 @@ def manager_weekly_summary(request):
 @_patch_login_required
 def export_sage_payroll_csv(request):
     week_start = _patch_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
     period_number = request.GET.get("period", "1")
     standard_hours = float(request.GET.get("standard_hours", "39"))
     include_header = request.GET.get("include_header") == "1"
+    force_export = request.GET.get("force") == "1"
     rows = _patch_get_week_rows(week_start, standard_hours)
 
+    unresolved_rows = [row for row in rows if row.get("warning") != "OK"]
+
+    # Production safety: do not silently export payroll when the manager still has
+    # warnings to review. The manager can still force an export, but only after
+    # seeing a clear warning page.
+    if unresolved_rows and not force_export:
+        return render(request, "sage_export_review.html", {
+            "week_start": week_start,
+            "week_end": week_end,
+            "period_number": period_number,
+            "standard_hours": standard_hours,
+            "unresolved_rows": unresolved_rows,
+            "unresolved_count": len(unresolved_rows),
+        })
+
+    filename = f"sage_payroll_{week_start.strftime('%Y_%m_%d')}.csv"
     response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
     writer = csv.writer(response)
 
     # Sage Payroll IE single-timesheet import order:
