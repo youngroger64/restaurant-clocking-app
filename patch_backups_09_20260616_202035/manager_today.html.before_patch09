@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Today Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f8; margin: 0; padding: 25px; color: #222; }
+        .container { max-width: 1250px; margin: auto; }
+        .header, .section { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 20px; margin: 18px 0; }
+        h1 { margin: 0 0 8px 0; }
+        .muted { color: #666; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 14px; margin: 18px 0; }
+        .card { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 18px; }
+        .card-title { font-size: 15px; color: #111827; }
+        .number { font-size: 36px; font-weight: bold; margin-top: 8px; }
+        .red { color: #b42318; }
+        .green { color: #1a7f37; }
+        .orange { color: #b7791f; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th, td { border-bottom: 1px solid #e5e7eb; padding: 11px; text-align: left; }
+        th { background: #f9fafb; }
+        .urgent { color: #b42318; font-weight: bold; }
+        .operational { color: #b7791f; font-weight: bold; }
+        .ok { color: #1a7f37; font-weight: bold; }
+        .button { display: inline-block; padding: 10px 13px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-right: 8px; margin-bottom: 8px; }
+        .secondary { background: #4b5563; }
+        input, button { padding: 8px; }
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 13px; font-weight: bold; }
+        .badge-green { background: #dcfce7; color: #166534; }
+        .badge-orange { background: #ffedd5; color: #9a3412; }
+        .priority-note { background: #f9fafb; padding: 10px; border-radius: 8px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>Today Dashboard</h1>
+        <p class="muted">Quick view for the manager: who is here, who is on break, who is late, and whether payroll needs attention.</p>
+        <form method="get">Date: <input type="date" name="date" value="{{ selected_date|date:'Y-m-d' }}"> <button type="submit">View Date</button></form>
+    </div>
+
+    <div class="cards">
+        <div class="card"><div class="card-title">👥 Working Now</div><div class="number">{{ currently_working }}</div></div>
+        <div class="card"><div class="card-title">☕ On Break</div><div class="number orange">{{ on_break }}</div></div>
+        <div class="card"><div class="card-title">⏰ Late</div><div class="number {% if late_count > 0 %}red{% endif %}">{{ late_count }}</div></div>
+        <div class="card"><div class="card-title">🚫 Not Arrived</div><div class="number {% if not_arrived_count > 0 %}red{% endif %}">{{ not_arrived_count }}</div></div>
+        <div class="card"><div class="card-title">⚠ Payroll Issues</div><div class="number {% if payroll_issues_count > 0 %}red{% else %}green{% endif %}">{{ payroll_issues_count }}</div></div>
+        <div class="card"><div class="card-title">✅ Payroll Ready</div><div class="number {% if payroll_ready < 80 %}red{% elif payroll_ready < 100 %}orange{% else %}green{% endif %}">{{ payroll_ready }}%</div></div>
+    </div>
+
+    <div class="section">
+        <h2>Staff Currently Working</h2>
+        <p class="muted">This is the live floor view: who is in the building and whether anyone is on break.</p>
+        <table>
+            <tr><th>Employee</th><th>Status</th><th>Roster</th><th>First In</th><th>Worked</th><th>Break</th></tr>
+            {% for row in working_rows %}
+            <tr>
+                <td>{{ row.employee }}</td>
+                <td>{% if row.is_on_break %}<span class="badge badge-orange">On Break</span>{% else %}<span class="badge badge-green">{{ row.status }}</span>{% endif %}</td>
+                <td>{{ row.roster }}</td>
+                <td>{{ row.first_in }}</td>
+                <td>{{ row.worked_hours }}h</td>
+                <td>{{ row.break_minutes }} mins</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6">No staff currently clocked in.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Today Roster Status</h2>
+        <p class="muted">A quick check of the whole day: who was expected and what their current status is.</p>
+        <div class="priority-note">
+            <strong>Rostered Today:</strong> {{ rostered_count }} &nbsp; | &nbsp;
+            <strong>Working:</strong> {{ currently_working }} &nbsp; | &nbsp;
+            <strong>On Break:</strong> {{ on_break }} &nbsp; | &nbsp;
+            <strong>Late:</strong> {{ late_count }} &nbsp; | &nbsp;
+            <strong>Not Arrived:</strong> {{ not_arrived_count }}
+        </div>
+        <table>
+            <tr><th>No</th><th>Employee</th><th>Roster</th><th>First In</th><th>Last Out</th><th>Status</th><th>Issue</th></tr>
+            {% for row in rows %}
+                {% if row.rostered %}
+                <tr>
+                    <td>{{ row.employee_number }}</td>
+                    <td>{{ row.employee }}</td>
+                    <td>{{ row.roster }}</td>
+                    <td>{{ row.first_in }}</td>
+                    <td>{{ row.last_out }}</td>
+                    <td>{{ row.status }}</td>
+                    <td class="{% if row.is_urgent %}urgent{% elif row.is_operational %}operational{% else %}ok{% endif %}">{{ row.issue }}</td>
+                </tr>
+                {% endif %}
+            {% empty %}
+            <tr><td colspan="7">No rostered staff today.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Needs Attention</h2>
+        <p class="muted">Everything the manager may need to look at today. Payroll issues are shown in red; operational notes are shown in amber.</p>
+        <table>
+            <tr><th>Employee</th><th>Type</th><th>Roster</th><th>Status</th><th>Issue</th><th>Worked</th><th>Break</th></tr>
+            {% for row in needs_attention_rows %}
+            <tr>
+                <td>{{ row.employee }}</td>
+                <td>{% if row.is_urgent %}<span class="urgent">Payroll</span>{% else %}<span class="operational">Operational</span>{% endif %}</td>
+                <td>{{ row.roster }}</td>
+                <td>{{ row.status }}</td>
+                <td class="{% if row.is_urgent %}urgent{% else %}operational{% endif %}">{{ row.issue }}</td>
+                <td>{{ row.worked_hours }}h</td>
+                <td>{{ row.break_minutes }} mins</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="ok">No issues need attention.</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Payroll Status</h2>
+        <p><strong>Payroll Ready:</strong>
+            <span class="{% if payroll_ready < 80 %}urgent{% elif payroll_ready < 100 %}operational{% else %}ok{% endif %}">{{ payroll_ready }}%</span>
+        </p>
+        <p><strong>Payroll issues remaining:</strong> {{ payroll_issues_count }}</p>
+        <p class="muted">Resolve payroll issues before exporting weekly payroll.</p>
+        <a class="button" href="/manager/payroll-problems/">Review Payroll Problems</a>
+        <a class="button secondary" href="/manager/weekly-summary/?week_start=2026-06-15">Weekly Summary</a>
+    </div>
+
+    <p>
+        <a class="button" href="/clock/">Staff Clocking</a>
+        <a class="button" href="/manager/upload-roster/">Upload Roster</a>
+        <a class="button secondary" href="/">Home</a>
+    </p>
+</div>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Weekly Payroll Summary</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f8; margin: 0; padding: 25px; color: #222; }
+        .container { max-width: 1250px; margin: auto; background: white; padding: 24px; border-radius: 14px; border: 1px solid #e5e7eb; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border-bottom: 1px solid #e5e7eb; padding: 10px; text-align: left; }
+        th { background: #f9fafb; }
+        .ok { color: #1a7f37; font-weight: bold; }
+        .warn { color: #b42318; font-weight: bold; }
+        .button { display: inline-block; padding: 10px 13px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-right: 8px; }
+        .secondary { background: #4b5563; }
+        input, button { padding: 8px; }
+    .section { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 18px; margin: 18px 0; }
+.muted { color: #666; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<h1>Weekly Payroll Summary</h1>
+
+<div class="section">
+    <h2>What the status means</h2>
+    <p class="muted">
+        <strong>OK</strong> means there are no clocking problems detected for that employee for this week.
+        It does not mean they worked all rostered hours; it means payroll can calculate from the clock events available.
+    </p>
+    <p class="muted">
+        Red warnings such as <strong>Rostered but absent</strong>, <strong>Missing clock-out</strong>,
+        <strong>Check clock sequence</strong>, or <strong>Working but not rostered</strong> should be reviewed before payroll export.
+    </p>
+    <p class="muted">
+        If a row is wrong, use <strong>Payroll Problems</strong> or <strong>Manager Corrections</strong> to edit/delete/add clock events.
+    </p>
+</div>
+
+
+<p>
+This page prepares payroll-style hours from clock records. Breaks are unpaid. Sunday hours are separated for Sunday premium handling. Overtime is calculated above the standard weekly hours entered below.
+</p>
+
+<form method="get">
+    Week Start:
+    <input type="date" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+    Standard Weekly Hours:
+    <input type="number" step="0.5" name="standard_hours" value="{{ standard_hours }}">
+    <button type="submit">View Week</button>
+</form>
+
+<h2>{{ week_start }} to {{ week_end }}</h2>
+
+{% if unresolved_problem_count and unresolved_problem_count > 0 %}
+<div style="background:#fffbeb; border-left:4px solid #f59e0b; padding:12px; margin:12px 0;">
+    <strong>{{ unresolved_problem_count }} payroll warning(s) found.</strong>
+    Review Payroll Problems before exporting to Sage.
+    <a href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Open Payroll Problems</a>
+</div>
+{% endif %}
+
+
+<p>
+    <a class="button" href="/manager/export-sage-payroll/?week_start={{ week_start|date:'Y-m-d' }}&period=1&standard_hours={{ standard_hours }}">
+        Download Sage Payroll CSV
+    </a>
+</p>
+
+<table>
+    <tr>
+        <th>Employee No</th>
+        <th>Employee</th>
+        <th>Rostered</th>
+        <th>Worked</th>
+        <th>Unpaid Breaks</th>
+        <th>Paid Hours</th>
+        <th>Normal</th>
+        <th>Sunday</th>
+        <th>Overtime</th>
+        <th>Difference</th>
+        <th>Status</th>
+    </tr>
+
+    {% for row in summary_rows %}
+    <tr>
+        <td>{{ row.employee_number }}</td>
+        <td>{{ row.employee }}</td>
+        <td>{{ row.rostered_hours }}</td>
+        <td>{{ row.worked_hours }}</td>
+        <td>{{ row.break_hours }}</td>
+        <td>{{ row.paid_hours }}</td>
+        <td>{{ row.normal_hours }}</td>
+        <td>{{ row.sunday_hours }}</td>
+        <td>{{ row.overtime_hours }}</td>
+        <td>{{ row.difference }}</td>
+        <td class="{% if row.warning == 'OK' %}ok{% else %}warn{% endif %}">
+            {{ row.warning }}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+<p>
+    <a class="button secondary" href="/manager/payroll-problems/?week_start={{ week_start|date:'Y-m-d' }}">Payroll Problems</a>
+    <a class="button secondary" href="/manager/today/">Today's Dashboard</a>
+    <a class="button secondary" href="/manager/upload-roster/">Upload Roster</a>
+    <a class="button secondary" href="/">Home</a>
+</p>
+
+</div>
+
+</body>
+</html>

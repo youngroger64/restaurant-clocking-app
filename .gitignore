@@ -6,3 +6,7 @@ db.sqlite3
 *.log
 staticfiles/
 media/
+*.env
+*.sqlite3
+backups_patch_*/
+archive/
