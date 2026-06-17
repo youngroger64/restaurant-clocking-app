@@ -1,0 +1,38 @@
+<div class="quick-row">
+{% for action in row.quick_actions %}
+    {% if action.mode == 'advanced' %}
+        <a class="advanced" href="/manager/fix-day/?employee_number={{ row.employee_number }}&event_date={{ row.date|date:'Y-m-d' }}&week_start={{ week_start|date:'Y-m-d' }}">{{ action.label }}</a>
+    {% elif action.mode == 'enter_actual_start' or action.mode == 'enter_actual_finish' %}
+        <form class="actual-form" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="mode" value="{{ action.mode }}">
+            <input type="hidden" name="employee_number" value="{{ row.employee_number }}">
+            <input type="hidden" name="event_date" value="{{ row.date|date:'Y-m-d' }}">
+            <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+            <input type="time" name="actual_time" required>
+            <button class="button fix smallfix" type="submit">{{ action.label }}</button>
+        </form>
+    {% elif action.mode == 'enter_actual_shift' %}
+        <form class="actual-form" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="mode" value="enter_actual_shift">
+            <input type="hidden" name="employee_number" value="{{ row.employee_number }}">
+            <input type="hidden" name="event_date" value="{{ row.date|date:'Y-m-d' }}">
+            <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+            <input type="time" name="start_time" required>
+            <span>to</span>
+            <input type="time" name="finish_time" required>
+            <button class="button fix smallfix" type="submit">{{ action.label }}</button>
+        </form>
+    {% else %}
+        <form method="post" style="display:inline;">
+            {% csrf_token %}
+            <input type="hidden" name="mode" value="{{ action.mode }}">
+            <input type="hidden" name="employee_number" value="{{ row.employee_number }}">
+            <input type="hidden" name="event_date" value="{{ row.date|date:'Y-m-d' }}">
+            <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
+            <button class="button {% if action.mode == 'approve_unrostered_shift' %}approve{% else %}fix{% endif %} smallfix" type="submit">{{ action.label }}</button>
+        </form>
+    {% endif %}
+{% endfor %}
+</div>

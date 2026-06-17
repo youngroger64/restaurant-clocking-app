@@ -3762,49 +3762,63 @@ def export_sage_payroll_csv(request):
 # -------------------------------------------------------------------
 # Patch 45: final payroll source-of-truth overrides
 # -------------------------------------------------------------------
-# All payroll-facing screens below intentionally use core.services.payroll.
-# This prevents stale patch generations from showing different issue counts.
-from django.contrib.auth.decorators import login_required as _p45_login_required
-from django.shortcuts import render as _p45_render
-from django.http import HttpResponse as _p45_HttpResponse
+# -------------------------------------------------------------------
+# Patch 48: manager-approved payroll rules and synced counts
+# -------------------------------------------------------------------
+# This replaces the Patch 45 final payroll block. It deliberately does not
+# append another copy of payroll views above this point.
+from django.contrib.auth.decorators import login_required as _p48_login_required
+from django.shortcuts import render as _p48_render
 from core.services.payroll import (
-    parse_week_start as _p45_parse_week_start,
-    get_payroll_issue_rows as _p45_get_payroll_issue_rows,
-    payroll_is_ready as _p45_payroll_is_ready,
-    get_weekly_summary_rows as _p45_get_weekly_summary_rows,
-    get_export_rows as _p45_get_export_rows,
-    get_weekly_totals as _p45_get_weekly_totals,
-    build_sage_csv_response as _p45_build_sage_csv_response,
+    parse_week_start as _p48_parse_week_start,
+    get_payroll_blocker_rows as _p48_get_payroll_blocker_rows,
+    get_manager_review_rows as _p48_get_manager_review_rows,
+    payroll_is_ready as _p48_payroll_is_ready,
+    get_weekly_summary_rows as _p48_get_weekly_summary_rows,
+    get_export_rows as _p48_get_export_rows,
+    get_weekly_totals as _p48_get_weekly_totals,
+    build_sage_csv_response as _p48_build_sage_csv_response,
+    apply_quick_fix as _p48_apply_quick_fix,
 )
 
+# Keep older dashboard/home functions synced without rewriting them here.
+_dp30_payroll_is_ready = _p48_payroll_is_ready
 
-@_p45_login_required
+
+@_p48_login_required
 def payroll_problems(request):
-    week_start = _p45_parse_week_start(request)
+    if request.method == "POST":
+        return _p48_apply_quick_fix(request)
+
+    week_start = _p48_parse_week_start(request)
     week_end = week_start + timedelta(days=6)
-    rows = _p45_get_payroll_issue_rows(week_start)
-    return _p45_render(request, "payroll_problems.html", {
+    rows = _p48_get_payroll_blocker_rows(week_start)
+    review_rows = _p48_get_manager_review_rows(week_start)
+    return _p48_render(request, "payroll_problems.html", {
         "week_start": week_start,
         "week_end": week_end,
         "rows": rows,
+        "review_rows": review_rows,
         "problem_count": len(rows),
         "payroll_problem_count": len(rows),
         "unresolved_problem_count": len(rows),
+        "manager_review_count": len(review_rows),
     })
 
 
-@_p45_login_required
+@_p48_login_required
 def manager_weekly_summary(request):
-    week_start = _p45_parse_week_start(request)
+    week_start = _p48_parse_week_start(request)
     week_end = week_start + timedelta(days=6)
     standard_hours = float(request.GET.get("standard_hours", "39") or 39)
     period_number = request.GET.get("period", "1") or "1"
-    summary_rows = _p45_get_weekly_summary_rows(week_start, standard_hours)
-    export_rows = _p45_get_export_rows(week_start, standard_hours)
-    payroll_ready_bool, payroll_issue_rows = _p45_payroll_is_ready(week_start)
-    totals = _p45_get_weekly_totals(summary_rows)
+    summary_rows = _p48_get_weekly_summary_rows(week_start, standard_hours)
+    export_rows = _p48_get_export_rows(week_start, standard_hours)
+    payroll_ready_bool, payroll_issue_rows = _p48_payroll_is_ready(week_start)
+    review_rows = _p48_get_manager_review_rows(week_start)
+    totals = _p48_get_weekly_totals(summary_rows)
 
-    return _p45_render(request, "weekly_summary.html", {
+    return _p48_render(request, "weekly_summary.html", {
         "week_start": week_start,
         "week_end": week_end,
         "summary_rows": summary_rows,
@@ -3815,21 +3829,22 @@ def manager_weekly_summary(request):
         "payroll_ready": payroll_ready_bool,
         "payroll_problem_count": len(payroll_issue_rows),
         "unresolved_problem_count": len(payroll_issue_rows),
+        "manager_review_count": len(review_rows),
         "totals": totals,
     })
 
 
-@_p45_login_required
+@_p48_login_required
 def export_sage_payroll_csv(request):
-    week_start = _p45_parse_week_start(request)
+    week_start = _p48_parse_week_start(request)
     week_end = week_start + timedelta(days=6)
     period_number = request.GET.get("period", "1") or "1"
     standard_hours = float(request.GET.get("standard_hours", "39") or 39)
     allow_unresolved = request.GET.get("allow_unresolved") == "1"
-    payroll_ready_bool, payroll_issue_rows = _p45_payroll_is_ready(week_start)
+    payroll_ready_bool, payroll_issue_rows = _p48_payroll_is_ready(week_start)
 
     if payroll_issue_rows and not allow_unresolved:
-        return _p45_render(request, "payroll_export_blocked.html", {
+        return _p48_render(request, "payroll_export_blocked.html", {
             "week_start": week_start,
             "week_end": week_end,
             "problem_count": len(payroll_issue_rows),
@@ -3840,4 +3855,5 @@ def export_sage_payroll_csv(request):
             "period_number": period_number,
         })
 
-    return _p45_build_sage_csv_response(week_start, standard_hours, period_number)
+    return _p48_build_sage_csv_response(week_start, standard_hours, period_number)
+
