@@ -13,6 +13,7 @@
         .button { display: inline-block; padding: 10px 13px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-right: 8px; margin-bottom: 8px; border:0; cursor:pointer; }
         .secondary { background: #4b5563; }
         .fix { background: #b45309; }
+        .danger { background: #991b1b; }
         .smallfix { padding: 7px 10px; font-size: 13px; }
         input, button { padding: 8px; }
         .note { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 10px; margin: 12px 0; }
@@ -28,7 +29,7 @@
 <body>
 <div class="container">
 <h1>Payroll Issues</h1>
-<p>Fix the common payroll issues here. Use the quick fix that matches what should be paid.</p>
+<p>Fix the clock records that would affect payroll. Choose the option that matches what the employee should be paid.</p>
 
 {% if messages %}
 <div class="messages">
@@ -50,7 +51,7 @@
 {% endif %}
 
 <table>
-    <tr><th>Date</th><th>Employee</th><th>Roster</th><th>Status</th><th>Worked</th><th>Problem</th><th>Quick Fix</th></tr>
+    <tr><th>Date</th><th>Employee</th><th>Roster</th><th>Status</th><th>Worked</th><th>Problem</th><th>Manager Fix</th></tr>
     {% for row in rows %}
     <tr>
         <td>{{ row.date }}</td>
@@ -62,9 +63,7 @@
         <td>
             <div class="quick-row">
             {% for action in row.quick_actions %}
-                {% if action.mode == 'advanced' %}
-                    <a class="advanced" href="/manager/fix-day/?employee_number={{ row.employee_number }}&event_date={{ row.date|date:'Y-m-d' }}&week_start={{ week_start|date:'Y-m-d' }}">Review</a>
-                {% elif action.mode == 'enter_actual_finish' %}
+                {% if action.mode == 'enter_actual_finish' %}
                     <form class="actual-form" method="post">
                         {% csrf_token %}
                         <input type="hidden" name="mode" value="enter_actual_finish">
@@ -93,11 +92,11 @@
                         <input type="hidden" name="employee_number" value="{{ row.employee_number }}">
                         <input type="hidden" name="event_date" value="{{ row.date|date:'Y-m-d' }}">
                         <input type="hidden" name="week_start" value="{{ week_start|date:'Y-m-d' }}">
-                        <button class="button fix smallfix" type="submit">{{ action.label }}</button>
+                        <button class="button {% if action.mode == 'delete_day_events' %}danger{% else %}fix{% endif %} smallfix" type="submit">{{ action.label }}</button>
                     </form>
                 {% endif %}
             {% endfor %}
-            <a class="advanced" href="/manager/fix-day/?employee_number={{ row.employee_number }}&event_date={{ row.date|date:'Y-m-d' }}&week_start={{ week_start|date:'Y-m-d' }}">Advanced</a>
+            <a class="advanced" href="/manager/fix-day/?employee_number={{ row.employee_number }}&event_date={{ row.date|date:'Y-m-d' }}&week_start={{ week_start|date:'Y-m-d' }}">Advanced edit</a>
             </div>
         </td>
     </tr>
@@ -106,10 +105,10 @@
     {% endfor %}
 </table>
 
-<p class="help">Break warnings are handled on the live dashboard. They do not block payroll export unless the clock records themselves are wrong.</p>
+<p class="help">Break reminders and late arrivals are operational issues for the live dashboard. This page only blocks payroll when the clock records themselves need fixing.</p>
 
 <p>
-    <a class="button" href="/manager/weekly-summary/?week_start={{ week_start|date:'Y-m-d' }}">Weekly Summary</a>
+    <a class="button" href="/manager/weekly-summary/?week_start={{ week_start|date:'Y-m-d' }}">Weekly Payroll</a>
     <a class="button secondary" href="/manager/today/">Manager Dashboard</a>
     <a class="button secondary" href="/">Home</a>
 </p>

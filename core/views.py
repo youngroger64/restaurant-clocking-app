@@ -3775,11 +3775,16 @@ from core.services.payroll import (
     get_export_rows as _p45_get_export_rows,
     get_weekly_totals as _p45_get_weekly_totals,
     build_sage_csv_response as _p45_build_sage_csv_response,
+    apply_payroll_quick_fix_from_request as _p46_apply_payroll_quick_fix_from_request,
 )
 
 
 @_p45_login_required
 def payroll_problems(request):
+    if request.method == "POST":
+        week_start = _p46_apply_payroll_quick_fix_from_request(request)
+        return _p45_redirect(f"/manager/payroll-problems/?week_start={week_start.isoformat()}")
+
     week_start = _p45_parse_week_start(request)
     week_end = week_start + timedelta(days=6)
     rows = _p45_get_payroll_issue_rows(week_start)
