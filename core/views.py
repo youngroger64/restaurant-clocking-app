@@ -3758,3 +3758,86 @@ def export_sage_payroll_csv(request):
             continue
         writer.writerow([period_number, employee_number, "0000", normal, sunday, overtime])
     return response
+
+# -------------------------------------------------------------------
+# Patch 45: final payroll source-of-truth overrides
+# -------------------------------------------------------------------
+# All payroll-facing screens below intentionally use core.services.payroll.
+# This prevents stale patch generations from showing different issue counts.
+from django.contrib.auth.decorators import login_required as _p45_login_required
+from django.shortcuts import render as _p45_render
+from django.http import HttpResponse as _p45_HttpResponse
+from core.services.payroll import (
+    parse_week_start as _p45_parse_week_start,
+    get_payroll_issue_rows as _p45_get_payroll_issue_rows,
+    payroll_is_ready as _p45_payroll_is_ready,
+    get_weekly_summary_rows as _p45_get_weekly_summary_rows,
+    get_export_rows as _p45_get_export_rows,
+    get_weekly_totals as _p45_get_weekly_totals,
+    build_sage_csv_response as _p45_build_sage_csv_response,
+)
+
+
+@_p45_login_required
+def payroll_problems(request):
+    week_start = _p45_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    rows = _p45_get_payroll_issue_rows(week_start)
+    return _p45_render(request, "payroll_problems.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "problem_count": len(rows),
+        "payroll_problem_count": len(rows),
+        "unresolved_problem_count": len(rows),
+    })
+
+
+@_p45_login_required
+def manager_weekly_summary(request):
+    week_start = _p45_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    standard_hours = float(request.GET.get("standard_hours", "39") or 39)
+    period_number = request.GET.get("period", "1") or "1"
+    summary_rows = _p45_get_weekly_summary_rows(week_start, standard_hours)
+    export_rows = _p45_get_export_rows(week_start, standard_hours)
+    payroll_ready_bool, payroll_issue_rows = _p45_payroll_is_ready(week_start)
+    totals = _p45_get_weekly_totals(summary_rows)
+
+    return _p45_render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_rows": summary_rows,
+        "rows": summary_rows,
+        "export_rows": export_rows,
+        "standard_hours": standard_hours,
+        "period_number": period_number,
+        "payroll_ready": payroll_ready_bool,
+        "payroll_problem_count": len(payroll_issue_rows),
+        "unresolved_problem_count": len(payroll_issue_rows),
+        "totals": totals,
+    })
+
+
+@_p45_login_required
+def export_sage_payroll_csv(request):
+    week_start = _p45_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    period_number = request.GET.get("period", "1") or "1"
+    standard_hours = float(request.GET.get("standard_hours", "39") or 39)
+    allow_unresolved = request.GET.get("allow_unresolved") == "1"
+    payroll_ready_bool, payroll_issue_rows = _p45_payroll_is_ready(week_start)
+
+    if payroll_issue_rows and not allow_unresolved:
+        return _p45_render(request, "payroll_export_blocked.html", {
+            "week_start": week_start,
+            "week_end": week_end,
+            "problem_count": len(payroll_issue_rows),
+            "payroll_problem_count": len(payroll_issue_rows),
+            "unresolved_problem_count": len(payroll_issue_rows),
+            "problems": payroll_issue_rows,
+            "standard_hours": standard_hours,
+            "period_number": period_number,
+        })
+
+    return _p45_build_sage_csv_response(week_start, standard_hours, period_number)
