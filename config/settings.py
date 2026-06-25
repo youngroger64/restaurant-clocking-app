@@ -50,7 +50,7 @@ def env_list(name: str, default: str = "localhost,127.0.0.1") -> list[str]:
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "unsafe-dev-secret-key-change-me")
 DEBUG = env_bool("DJANGO_DEBUG", False)
-ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS")
+ALLOWED_HOSTS = ["13.60.117.38", "clock.localpulse.ie", "www.clock.localpulse.ie", "localhost", "127.0.0.1"]
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")
 
 INSTALLED_APPS = [

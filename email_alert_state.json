@@ -1,4 +1,6 @@
 {
   "2026-06-16": "103:Rostered but absent|104:Rostered but absent|106:Rostered but absent|456:Working but not rostered",
-  "2026-06-17": "102:Check clock events|123:Unrostered shift|789:Check clock events; Unrostered shift"
+  "2026-06-17": "102:Check clock events|123:Unrostered shift|789:Check clock events; Unrostered shift",
+  "2026-06-24": "202:Unrostered shift|203:Break missing or too short|204:Unrostered shift|205:Unrostered shift; 30 min break overdue|210:Unrostered shift; 30 min break overdue|211:Unrostered shift",
+  "2026-06-25": "207:Check clock events|209:Check clock events; Unrostered shift|210:Check clock events; Unrostered shift"
 }
