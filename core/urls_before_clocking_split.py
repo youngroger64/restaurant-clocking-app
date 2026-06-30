@@ -1,8 +1,8 @@
-from .clocking_views import smart_clock_page
 from django.urls import path
 
 from .views import (
     home_page,
+    smart_clock_page,
     export_clock_events_csv,
     upload_roster,
     manager_dashboard,
