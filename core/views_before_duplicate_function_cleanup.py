@@ -1001,6 +1001,59 @@ def _manager_issue_rows(selected_date):
     return rows
 
 
+def manager_today_dashboard(request):
+    selected_date_str = request.GET.get(
+        "date",
+        timezone.localdate().strftime("%Y-%m-%d")
+    )
+    selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+
+    rows = get_day_rows(selected_date)
+
+    urgent_rows = [row for row in rows if row["is_urgent"]]
+    operational_rows = [row for row in rows if row["is_operational"]]
+    working_rows = [row for row in rows if row["is_working"]]
+    needs_attention_rows = urgent_rows + operational_rows
+
+    late_count = sum(
+        1 for row in needs_attention_rows
+        if "late" in row.get("issue", "").lower()
+    )
+
+    not_arrived_count = sum(
+        1 for row in needs_attention_rows
+        if (
+            "not arrived" in row.get("issue", "").lower()
+            or "absent" in row.get("issue", "").lower()
+            or "no clock-in" in row.get("issue", "").lower()
+        )
+    )
+
+    payroll_issues_count = len(urgent_rows)
+    rostered_count = sum(1 for row in rows if row["rostered"])
+    payroll_ready = 100
+    if rostered_count > 0:
+        payroll_ready = max(0, min(100, round(((rostered_count - payroll_issues_count) / rostered_count) * 100)))
+
+
+    return render(request, "manager_today.html", {
+        "selected_date": selected_date,
+        "rows": rows,
+        "urgent_rows": urgent_rows,
+        "operational_rows": operational_rows,
+        "working_rows": working_rows,
+        "needs_attention_rows": needs_attention_rows,
+        "late_count": late_count,
+        "not_arrived_count": not_arrived_count,
+        "payroll_issues_count": payroll_issues_count,
+        "payroll_ready": payroll_ready,
+        "rostered_count": rostered_count,
+        "currently_working": len(working_rows),
+        "on_break": sum(1 for row in rows if row["is_on_break"]),
+        "clocked_out": sum(1 for row in rows if row["is_clocked_out"]),
+        "urgent_count": len(urgent_rows),
+        "operational_count": len(operational_rows),
+    })
 
 
 def _latest_today_event(employee):
@@ -1349,6 +1402,142 @@ def manager_corrections(request):
     })
 
 
+def home_page(request):
+    # Restaurant Operations Dashboard.
+    # Manager logic:
+    # 1) Who is physically working/on break now?
+    # 2) What happened to today's roster?
+    # 3) What needs manager review?
+    from core.compliance import get_day_rows, get_week_rows
+
+    today = timezone.localdate()
+    now_dt = timezone.localtime()
+    now_time = now_dt.time()
+    week_start = today - timedelta(days=today.weekday())
+
+    rows = get_day_rows(today)
+    week_rows = get_week_rows(week_start, 39)
+
+    roster_shifts_today = RosterShift.objects.select_related("employee").filter(
+        shift_date=today
+    ).order_by("start_time", "employee__name")
+
+    later_employee_numbers = set()
+    current_employee_numbers = set()
+    finished_employee_numbers = set()
+
+    for shift in roster_shifts_today:
+        emp_no = str(shift.employee.employee_number)
+
+        if shift.start_time <= shift.end_time:
+            if shift.start_time <= now_time <= shift.end_time:
+                current_employee_numbers.add(emp_no)
+            elif now_time < shift.start_time:
+                later_employee_numbers.add(emp_no)
+            else:
+                finished_employee_numbers.add(emp_no)
+        else:
+            if now_time >= shift.start_time or now_time <= shift.end_time:
+                current_employee_numbers.add(emp_no)
+            elif now_time < shift.start_time:
+                later_employee_numbers.add(emp_no)
+            else:
+                finished_employee_numbers.add(emp_no)
+
+    roster_rows = [row for row in rows if row.get("rostered")]
+    live_rows = [row for row in rows if row.get("is_working") or row.get("is_on_break")]
+
+    for row in rows:
+        emp_no = str(row.get("employee_number"))
+        issue = row.get("issue") or ""
+        issue_l = issue.lower()
+        status = row.get("status") or ""
+
+        if row.get("is_on_break"):
+            row["manager_status"] = "On Break"
+            row["manager_status_class"] = "orange"
+        elif row.get("is_working") or status == "Back from break":
+            row["manager_status"] = "Working"
+            row["manager_status_class"] = "green"
+        elif emp_no in later_employee_numbers and not row.get("has_activity"):
+            row["manager_status"] = "Due Later"
+            row["manager_status_class"] = "blue"
+        elif emp_no in current_employee_numbers and not row.get("has_activity"):
+            row["manager_status"] = "Not Arrived"
+            row["manager_status_class"] = "red"
+        elif emp_no in finished_employee_numbers and not row.get("has_activity"):
+            row["manager_status"] = "Didn't Clock In"
+            row["manager_status_class"] = "red"
+        elif row.get("has_activity") or status == "Clocked out":
+            row["manager_status"] = "Finished Shift"
+            row["manager_status_class"] = "blue"
+        else:
+            row["manager_status"] = "No Clock Records"
+            row["manager_status_class"] = "red"
+
+        if "rostered but absent" in issue_l:
+            row["manager_issue"] = "Didn't clock in for shift"
+        elif "working but not rostered" in issue_l:
+            row["manager_issue"] = "Worked without matching roster shift"
+        elif issue == "OK":
+            row["manager_issue"] = ""
+        else:
+            row["manager_issue"] = issue
+
+        if "working but not rostered" in issue_l or "not rostered" in issue_l:
+            row["manager_issue_type"] = "Roster"
+            row["manager_issue_type_class"] = "blue"
+        elif "rostered but absent" in issue_l or "not arrived" in issue_l or "late" in issue_l:
+            row["manager_issue_type"] = "Attendance"
+            row["manager_issue_type_class"] = "orange"
+        elif "clock" in issue_l or "break" in issue_l:
+            row["manager_issue_type"] = "Clocking"
+            row["manager_issue_type_class"] = "red"
+        else:
+            row["manager_issue_type"] = "Operational"
+            row["manager_issue_type_class"] = "orange"
+
+    needs_attention_rows = []
+    for row in rows:
+        issue_l = (row.get("issue") or "").lower()
+        emp_no = str(row.get("employee_number"))
+
+        include = False
+        if "working but not rostered" in issue_l or "not rostered" in issue_l:
+            include = True
+        elif "check clock sequence" in issue_l or "missing clock" in issue_l or "open break" in issue_l:
+            include = True
+        elif "late" in issue_l:
+            include = True
+        elif ("rostered but absent" in issue_l or "not arrived" in issue_l) and emp_no in current_employee_numbers:
+            include = True
+
+        if include:
+            needs_attention_rows.append(row)
+
+    payroll_blockers = []
+    for row in week_rows:
+        warning = (row.get("warning") or "").lower()
+        if row.get("warning") == "OK":
+            continue
+        if "rostered but absent" in warning or "working but not rostered" in warning or "not rostered" in warning:
+            continue
+        payroll_blockers.append(row)
+
+    return render(request, "home.html", {
+        "today": today,
+        "now_time": now_dt,
+        "week_start": week_start,
+        "rows": rows,
+        "roster_rows": roster_rows,
+        "live_rows": live_rows,
+        "needs_attention_rows": needs_attention_rows[:10],
+        "rostered_today_count": len(roster_rows),
+        "working_now_count": sum(1 for row in live_rows if row.get("is_working")),
+        "on_break_count": sum(1 for row in live_rows if row.get("is_on_break")),
+        "not_arrived_now_count": sum(1 for row in roster_rows if row.get("manager_status") == "Not Arrived"),
+        "payroll_blocker_count": len(payroll_blockers),
+    })
 
 
 
@@ -1507,12 +1696,97 @@ def _patch_payroll_problem_rows(week_start):
     return rows
 
 
+@_patch_login_required
+def payroll_problems(request):
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    rows = _patch_payroll_problem_rows(week_start)
+
+    return render(request, "payroll_problems.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "problem_count": len(rows),
+    })
 
 
+@_patch_login_required
+def manager_weekly_summary(request):
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    summary_rows = _patch_get_week_rows(week_start, standard_hours)
+
+    # Important: this count must match the Payroll Problems page exactly.
+    payroll_problem_rows = _patch_payroll_problem_rows(week_start)
+
+    return render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_rows": summary_rows,
+        "standard_hours": standard_hours,
+        "unresolved_problem_count": len(payroll_problem_rows),
+    })
 
 
+@_patch_login_required
+def export_sage_payroll_csv(request):
+    week_start = _patch_parse_week_start(request)
+    period_number = request.GET.get("period", "1")
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    include_header = request.GET.get("include_header") == "1"
+    allow_unresolved = request.GET.get("allow_unresolved") == "1"
+
+    payroll_problem_rows = _patch_payroll_problem_rows(week_start)
+    if payroll_problem_rows and not allow_unresolved:
+        week_end = week_start + timedelta(days=6)
+        return render(request, "payroll_export_blocked.html", {
+            "week_start": week_start,
+            "week_end": week_end,
+            "problem_count": len(payroll_problem_rows),
+            "problems": payroll_problem_rows,
+            "standard_hours": standard_hours,
+            "period_number": period_number,
+        })
+
+    rows = _patch_get_week_rows(week_start, standard_hours)
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
+    writer = csv.writer(response)
+
+    # Sage Payroll IE single-timesheet import order:
+    # period number, employee number, 0000, payment element 1, payment element 2, payment element 3.
+    # Header is OFF by default because Sage imports usually expect raw rows only.
+    if include_header:
+        writer.writerow(["PeriodNumber", "EmployeeNumber", "0000", "NormalHours", "SundayHours", "OvertimeHours"])
+
+    for row in rows:
+        if row["paid_minutes"] == 0:
+            continue
+        writer.writerow([
+            period_number,
+            row["employee_number"],
+            "0000",
+            row["normal_hours"],
+            row["sunday_hours"],
+            row["overtime_hours"],
+        ])
+
+    return response
 
 
+# Final manager view protection - must stay at end
+manager_today_dashboard = login_required(manager_today_dashboard)
+upload_roster = login_required(upload_roster)
+manager_weekly_summary = login_required(manager_weekly_summary)
+manager_daily_monitor = login_required(manager_daily_monitor)
+payroll_problems = login_required(payroll_problems)
+manager_add_missing_event = login_required(manager_add_missing_event)
+export_sage_payroll_csv = login_required(export_sage_payroll_csv)
+manager_corrections = login_required(manager_corrections)
+manager_fix_day = login_required(manager_fix_day)
+export_clock_events_csv = login_required(export_clock_events_csv)
 
 
 # -------------------------------------------------------------------
@@ -1535,6 +1809,26 @@ def _patch15_week_start_from_request(request):
     return _patch15_current_week_start()
 
 
+def roster_manager(request):
+    week_start = _patch15_week_start_from_request(request)
+    week_end = week_start + timedelta(days=6)
+
+    # If a CSV is posted to this page, reuse the old upload_roster logic.
+    if request.method == "POST" and request.FILES.get("roster_file"):
+        return upload_roster(request)
+
+    employees = Employee.objects.filter(active=True).order_by("name")
+    shifts = RosterShift.objects.select_related("employee").filter(
+        shift_date__gte=week_start,
+        shift_date__lte=week_end,
+    ).order_by("shift_date", "start_time", "employee__name")
+
+    return render(request, "upload_roster.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "employees": employees,
+        "shifts": shifts,
+    })
 
 
 @_patch15_require_POST
@@ -1724,15 +2018,189 @@ def roster_manager(request):
 # Keeps status wording consistent across dashboard pages.
 # -------------------------------------------------------------------
 
+def manager_today_dashboard(request):
+    from core.compliance import get_day_rows, get_week_rows
+
+    raw_date = request.GET.get("date")
+    if raw_date:
+        selected_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+    else:
+        selected_date = timezone.localdate()
+
+    today = timezone.localdate()
+    now_dt = timezone.localtime()
+    now_time = now_dt.time()
+    week_start = selected_date - timedelta(days=selected_date.weekday())
+
+    rows = get_day_rows(selected_date)
+    week_rows = get_week_rows(week_start, 39)
+
+    roster_shifts = RosterShift.objects.select_related("employee").filter(
+        shift_date=selected_date
+    ).order_by("start_time", "employee__name")
+
+    current_employee_numbers = set()
+    later_employee_numbers = set()
+    finished_employee_numbers = set()
+    is_today = selected_date == today
+
+    for shift in roster_shifts:
+        emp_no = str(shift.employee.employee_number)
+
+        if not is_today:
+            if selected_date < today:
+                finished_employee_numbers.add(emp_no)
+            else:
+                later_employee_numbers.add(emp_no)
+            continue
+
+        if shift.start_time <= shift.end_time:
+            if shift.start_time <= now_time <= shift.end_time:
+                current_employee_numbers.add(emp_no)
+            elif now_time < shift.start_time:
+                later_employee_numbers.add(emp_no)
+            else:
+                finished_employee_numbers.add(emp_no)
+        else:
+            if now_time >= shift.start_time or now_time <= shift.end_time:
+                current_employee_numbers.add(emp_no)
+            elif now_time < shift.start_time:
+                later_employee_numbers.add(emp_no)
+            else:
+                finished_employee_numbers.add(emp_no)
+
+    roster_rows = [row for row in rows if row.get("rostered")]
+
+    for row in rows:
+        emp_no = str(row.get("employee_number"))
+        issue = row.get("issue") or ""
+        issue_l = issue.lower()
+        status = row.get("status") or ""
+
+        if row.get("is_on_break"):
+            row["manager_status"] = "On Break"
+            row["manager_status_class"] = "orange"
+        elif row.get("is_working") or status == "Back from break":
+            row["manager_status"] = "Working"
+            row["manager_status_class"] = "green"
+        elif emp_no in later_employee_numbers and not row.get("has_activity"):
+            row["manager_status"] = "Due Later"
+            row["manager_status_class"] = "blue"
+        elif emp_no in current_employee_numbers and not row.get("has_activity"):
+            row["manager_status"] = "Not Arrived"
+            row["manager_status_class"] = "red"
+        elif emp_no in finished_employee_numbers and not row.get("has_activity"):
+            row["manager_status"] = "Didn't Clock In"
+            row["manager_status_class"] = "red"
+        elif row.get("has_activity") or status == "Clocked out":
+            row["manager_status"] = "Finished Shift"
+            row["manager_status_class"] = "blue"
+        else:
+            row["manager_status"] = "No Clock Records"
+            row["manager_status_class"] = "red"
+
+        if "rostered but absent" in issue_l:
+            row["manager_issue"] = "Didn't clock in for shift"
+        elif "working but not rostered" in issue_l:
+            row["manager_issue"] = "Worked without matching roster shift"
+        elif issue == "OK":
+            row["manager_issue"] = ""
+        else:
+            row["manager_issue"] = issue
+
+        if "working but not rostered" in issue_l or "not rostered" in issue_l:
+            row["manager_issue_type"] = "Roster"
+            row["manager_issue_type_class"] = "blue"
+        elif "rostered but absent" in issue_l or "not arrived" in issue_l:
+            row["manager_issue_type"] = "Attendance"
+            row["manager_issue_type_class"] = "orange"
+        elif "late" in issue_l:
+            row["manager_issue_type"] = "Attendance"
+            row["manager_issue_type_class"] = "orange"
+        elif "clock" in issue_l or "break" in issue_l:
+            row["manager_issue_type"] = "Clocking"
+            row["manager_issue_type_class"] = "red"
+        else:
+            row["manager_issue_type"] = "Operational"
+            row["manager_issue_type_class"] = "orange"
+
+    live_rows = [
+        row for row in rows
+        if row.get("is_working") or row.get("is_on_break")
+    ]
+
+    needs_attention_rows = []
+    for row in rows:
+        issue = row.get("issue") or ""
+        issue_l = issue.lower()
+        emp_no = str(row.get("employee_number"))
+        include = False
+
+        if "working but not rostered" in issue_l or "not rostered" in issue_l:
+            include = True
+        elif "check clock sequence" in issue_l or "missing clock" in issue_l or "open break" in issue_l:
+            include = True
+        elif "late" in issue_l:
+            include = True
+        elif ("rostered but absent" in issue_l or "not arrived" in issue_l) and (not is_today or emp_no in current_employee_numbers or emp_no in finished_employee_numbers):
+            include = True
+
+        if include:
+            needs_attention_rows.append(row)
+
+    payroll_blockers = []
+    for row in week_rows:
+        warning = (row.get("warning") or "").lower()
+        if row.get("warning") == "OK":
+            continue
+        if "rostered but absent" in warning or "working but not rostered" in warning or "not rostered" in warning:
+            continue
+        payroll_blockers.append(row)
+
+    return render(request, "manager_today.html", {
+        "selected_date": selected_date,
+        "today": today,
+        "now_time": now_dt,
+        "is_today": is_today,
+        "rows": rows,
+        "roster_rows": roster_rows,
+        "live_rows": live_rows,
+        "needs_attention_rows": needs_attention_rows,
+        "rostered_count": len(roster_rows),
+        "working_count": sum(1 for row in live_rows if row.get("is_working")),
+        "on_break_count": sum(1 for row in live_rows if row.get("is_on_break")),
+        "not_arrived_now_count": sum(1 for row in roster_rows if row.get("manager_status") == "Not Arrived"),
+        "payroll_blocker_count": len(payroll_blockers),
+        "week_start": week_start,
+    })
 
 
+manager_today_dashboard = login_required(manager_today_dashboard)
 
 # -------------------------------------------------------------------
 # Patch 25: weekly payroll uses shared live roster calculations
 # -------------------------------------------------------------------
 
+def manager_weekly_summary(request):
+    from core.compliance import get_week_rows
+
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    rows = get_week_rows(week_start, 7)
+
+    payroll_blockers = sum(1 for row in rows if row.get("warning_type") == "Payroll")
+    roster_exceptions = sum(1 for row in rows if row.get("warning_type") == "Roster")
+
+    return render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "payroll_blockers": payroll_blockers,
+        "roster_exceptions": roster_exceptions,
+    })
 
 
+manager_weekly_summary = login_required(manager_weekly_summary)
 
 # Delivery patch 26: live dashboard, break compliance, payroll readiness
 # -------------------------------------------------------------------
@@ -1753,12 +2221,132 @@ def _dp26_week_start_from_request(request):
     return today - timedelta(days=today.weekday())
 
 
+@_dp26_login_required
+def manager_today_dashboard(request):
+    selected_date_str = request.GET.get("date", timezone.localdate().strftime("%Y-%m-%d"))
+    selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    rows = _dp26_get_day_rows(selected_date)
+
+    urgent_rows = [row for row in rows if row["is_urgent"]]
+    operational_rows = [row for row in rows if row["is_operational"]]
+    working_rows = [row for row in rows if row["is_working"] or row["is_on_break"]]
+    needs_attention_rows = urgent_rows + operational_rows
+
+    # Live screen should stay clean during service: active staff + urgent live blockers.
+    live_rows = []
+    seen = set()
+    for row in working_rows + urgent_rows:
+        key = row["employee_number"]
+        if key not in seen:
+            live_rows.append(row)
+            seen.add(key)
+
+    review_rows = [row for row in rows if row["rostered"] or row["has_activity"]]
+
+    late_count = sum(1 for row in operational_rows if "late" in row.get("issue", "").lower())
+    not_arrived_count = sum(
+        1 for row in operational_rows
+        if "absent" in row.get("issue", "").lower() or "not arrived" in row.get("issue", "").lower()
+    )
+
+    week_start = selected_date - timedelta(days=selected_date.weekday())
+    payroll_ready_bool, payroll_problem_rows = _dp26_payroll_is_ready(week_start)
+    payroll_issues_count = len(payroll_problem_rows)
+    payroll_ready = 100 if payroll_ready_bool else 0
+
+    return render(request, "manager_today.html", {
+        "selected_date": selected_date,
+        "week_start": week_start,
+        "rows": rows,
+        "live_rows": live_rows,
+        "review_rows": review_rows,
+        "urgent_rows": urgent_rows,
+        "operational_rows": operational_rows,
+        "working_rows": working_rows,
+        "needs_attention_rows": needs_attention_rows,
+        "late_count": late_count,
+        "not_arrived_count": not_arrived_count,
+        "late_absent_count": late_count + not_arrived_count,
+        "payroll_issues_count": payroll_issues_count,
+        "payroll_ready": payroll_ready,
+        "rostered_count": sum(1 for row in rows if row["rostered"]),
+        "currently_working": sum(1 for row in rows if row["is_working"]),
+        "on_break": sum(1 for row in rows if row["is_on_break"]),
+        "clocked_out": sum(1 for row in rows if row["is_clocked_out"]),
+        "urgent_count": len(urgent_rows),
+        "operational_count": len(operational_rows),
+    })
 
 
+@_dp26_login_required
+def payroll_problems(request):
+    week_start = _dp26_week_start_from_request(request)
+    week_end = week_start + timedelta(days=6)
+    rows = _dp26_get_payroll_problem_rows(week_start)
+    return render(request, "payroll_problems.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "problem_count": len(rows),
+    })
 
 
+@_dp26_login_required
+def manager_weekly_summary(request):
+    week_start = _dp26_week_start_from_request(request)
+    week_end = week_start + timedelta(days=6)
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    summary_rows = _dp26_get_week_rows(week_start, standard_hours)
+    payroll_ready_bool, payroll_problem_rows = _dp26_payroll_is_ready(week_start)
+
+    return render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_rows": summary_rows,
+        "standard_hours": standard_hours,
+        "payroll_ready": payroll_ready_bool,
+        "unresolved_problem_count": len(payroll_problem_rows),
+    })
 
 
+@_dp26_login_required
+def export_sage_payroll_csv(request):
+    week_start = _dp26_week_start_from_request(request)
+    period_number = request.GET.get("period", "1")
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    include_header = request.GET.get("include_header") == "1"
+
+    payroll_ready_bool, payroll_problem_rows = _dp26_payroll_is_ready(week_start)
+    if not payroll_ready_bool:
+        response = HttpResponse(content_type="text/plain", status=409)
+        response.write("Payroll export blocked. Fix payroll problems first:\n\n")
+        for problem in payroll_problem_rows:
+            response.write(f"{problem['date']} - {problem['employee']}: {problem['problem']}\n")
+        return response
+
+    rows = _dp26_get_week_rows(week_start, standard_hours)
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
+    writer = csv.writer(response)
+
+    # Sage Payroll IE single-timesheet import order:
+    # period number, employee number, 0000, payment element 1, payment element 2, payment element 3.
+    # Header is OFF by default because Sage imports often expect raw rows only.
+    if include_header:
+        writer.writerow(["PeriodNumber", "EmployeeNumber", "0000", "NormalHours", "SundayHours", "OvertimeHours"])
+
+    for row in rows:
+        if row["paid_minutes"] == 0:
+            continue
+        writer.writerow([
+            period_number,
+            row["employee_number"],
+            "0000",
+            row["normal_hours"],
+            row["sunday_hours"],
+            row["overtime_hours"],
+        ])
+    return response
 
 # -------------------------------------------------------------------
 # Delivery patch 27: make break status visible on home/today dashboards
@@ -1807,8 +2395,69 @@ def _dp27_not_arrived_now(rows):
     ]
 
 
+def home_page(request):
+    today = timezone.localdate()
+    week_start = _dp27_week_start(today)
+    rows = _dp27_get_day_rows(today)
+    live_rows = _dp27_live_rows(rows)
+    break_attention_rows = _dp27_break_attention_rows(rows)
+    roster_rows = _dp27_roster_rows(rows)
+    not_arrived_rows = _dp27_not_arrived_now(rows)
+    payroll_ready_bool, payroll_problem_rows = _dp27_payroll_is_ready(week_start)
+
+    return render(request, "home.html", {
+        "today": today,
+        "now_time": timezone.localtime(timezone.now()),
+        "week_start": week_start,
+        "rows": rows,
+        "live_rows": live_rows,
+        "break_attention_rows": break_attention_rows,
+        "roster_rows": roster_rows,
+        "not_arrived_now_count": len(not_arrived_rows),
+        "currently_working": sum(1 for row in rows if row.get("is_working")),
+        "on_break": sum(1 for row in rows if row.get("is_on_break")),
+        "rostered_count": sum(1 for row in rows if row.get("rostered")),
+        "break_attention_count": len(break_attention_rows),
+        "payroll_problem_count": len(payroll_problem_rows),
+        "payroll_ready": payroll_ready_bool,
+    })
 
 
+@_dp27_login_required
+def manager_today_dashboard(request):
+    selected_date_str = request.GET.get("date", timezone.localdate().strftime("%Y-%m-%d"))
+    selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    week_start = _dp27_week_start(selected_date)
+    rows = _dp27_get_day_rows(selected_date)
+    live_rows = _dp27_live_rows(rows)
+    break_attention_rows = _dp27_break_attention_rows(rows)
+    review_rows = _dp27_roster_rows(rows)
+
+    urgent_rows = [row for row in rows if row.get("is_urgent")]
+    operational_rows = [row for row in rows if row.get("is_operational")]
+    late_count = sum(1 for row in operational_rows if "late" in row.get("issue", "").lower())
+    not_arrived_count = len(_dp27_not_arrived_now(rows))
+    payroll_ready_bool, payroll_problem_rows = _dp27_payroll_is_ready(week_start)
+
+    return render(request, "manager_today.html", {
+        "selected_date": selected_date,
+        "week_start": week_start,
+        "rows": rows,
+        "live_rows": live_rows,
+        "break_attention_rows": break_attention_rows,
+        "review_rows": review_rows,
+        "urgent_rows": urgent_rows,
+        "operational_rows": operational_rows,
+        "late_count": late_count,
+        "not_arrived_count": not_arrived_count,
+        "late_absent_count": late_count + not_arrived_count,
+        "currently_working": sum(1 for row in rows if row.get("is_working")),
+        "on_break": sum(1 for row in rows if row.get("is_on_break")),
+        "rostered_count": sum(1 for row in rows if row.get("rostered")),
+        "break_attention_count": len(break_attention_rows),
+        "payroll_issues_count": len(payroll_problem_rows),
+        "payroll_ready": 100 if payroll_ready_bool else 0,
+    })
 
 # -------------------------------------------------------------------
 # Delivery patch 28: overnight operational day fix
@@ -1819,8 +2468,72 @@ def _dp27_not_arrived_now(rows):
 from core.compliance import current_operational_date as _dp28_current_operational_date
 
 
+def home_page(request):
+    today = _dp28_current_operational_date()
+    week_start = _dp27_week_start(today)
+    rows = _dp27_get_day_rows(today)
+    live_rows = _dp27_live_rows(rows)
+    break_attention_rows = _dp27_break_attention_rows(rows)
+    roster_rows = _dp27_roster_rows(rows)
+    not_arrived_rows = _dp27_not_arrived_now(rows)
+    payroll_ready_bool, payroll_problem_rows = _dp27_payroll_is_ready(week_start)
+
+    return render(request, "home.html", {
+        "today": today,
+        "operational_day_start_hour": 5,
+        "now_time": timezone.localtime(timezone.now()),
+        "week_start": week_start,
+        "rows": rows,
+        "live_rows": live_rows,
+        "break_attention_rows": break_attention_rows,
+        "roster_rows": roster_rows,
+        "not_arrived_now_count": len(not_arrived_rows),
+        "currently_working": sum(1 for row in rows if row.get("is_working")),
+        "on_break": sum(1 for row in rows if row.get("is_on_break")),
+        "rostered_count": sum(1 for row in rows if row.get("rostered")),
+        "break_attention_count": len(break_attention_rows),
+        "payroll_problem_count": len(payroll_problem_rows),
+        "payroll_ready": payroll_ready_bool,
+    })
 
 
+@_dp27_login_required
+def manager_today_dashboard(request):
+    default_date = _dp28_current_operational_date()
+    selected_date_str = request.GET.get("date", default_date.strftime("%Y-%m-%d"))
+    selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    week_start = _dp27_week_start(selected_date)
+    rows = _dp27_get_day_rows(selected_date)
+    live_rows = _dp27_live_rows(rows)
+    break_attention_rows = _dp27_break_attention_rows(rows)
+    review_rows = _dp27_roster_rows(rows)
+
+    urgent_rows = [row for row in rows if row.get("is_urgent")]
+    operational_rows = [row for row in rows if row.get("is_operational")]
+    late_count = sum(1 for row in operational_rows if "late" in row.get("issue", "").lower())
+    not_arrived_count = len(_dp27_not_arrived_now(rows))
+    payroll_ready_bool, payroll_problem_rows = _dp27_payroll_is_ready(week_start)
+
+    return render(request, "manager_today.html", {
+        "selected_date": selected_date,
+        "operational_day_start_hour": 5,
+        "week_start": week_start,
+        "rows": rows,
+        "live_rows": live_rows,
+        "break_attention_rows": break_attention_rows,
+        "review_rows": review_rows,
+        "urgent_rows": urgent_rows,
+        "operational_rows": operational_rows,
+        "late_count": late_count,
+        "not_arrived_count": not_arrived_count,
+        "late_absent_count": late_count + not_arrived_count,
+        "currently_working": sum(1 for row in rows if row.get("is_working")),
+        "on_break": sum(1 for row in rows if row.get("is_on_break")),
+        "rostered_count": sum(1 for row in rows if row.get("rostered")),
+        "break_attention_count": len(break_attention_rows),
+        "payroll_issues_count": len(payroll_problem_rows),
+        "payroll_ready": 100 if payroll_ready_bool else 0,
+    })
 
 # -------------------------------------------------------------------
 # Delivery patch 30: manager-first current staff and synced payroll issues
@@ -1841,6 +2554,12 @@ def _dp30_live_rows(rows):
     return [row for row in rows if row.get("is_working") or row.get("is_on_break")]
 
 
+def _dp30_break_attention_rows(rows):
+    return [
+        row for row in rows
+        if (row.get("is_working") or row.get("is_on_break"))
+        and row.get("break_css") in ["break-warn", "break-urgent"]
+    ]
 
 
 def _dp30_roster_rows(rows):
@@ -1938,8 +2657,64 @@ def _dp30_break_attention_rows(rows):
     ]
 
 
+@_dp31_login_required
+def manager_weekly_summary(request):
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + timedelta(days=6)
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    period_number = request.GET.get("period", "1")
+    summary_rows = _patch_get_week_rows(week_start, standard_hours)
+    summary_rows, export_rows = _dp31_add_export_strings(summary_rows)
+    payroll_ready_bool, payroll_problem_rows = _dp30_payroll_is_ready(week_start)
+
+    return render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_rows": summary_rows,
+        "export_rows": export_rows,
+        "standard_hours": standard_hours,
+        "period_number": period_number,
+        "payroll_problem_count": len(payroll_problem_rows),
+        "payroll_ready": payroll_ready_bool,
+    })
 
 
+@_dp31_login_required
+def export_sage_payroll_csv(request):
+    week_start = _patch_parse_week_start(request)
+    period_number = request.GET.get("period", "1")
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+
+    payroll_ready_bool, payroll_problem_rows = _dp30_payroll_is_ready(week_start)
+    if not payroll_ready_bool:
+        response = HttpResponse(content_type="text/plain", status=400)
+        response.write("Payroll is not ready. Fix payroll issues before exporting the Sage CSV.\n")
+        for row in payroll_problem_rows:
+            response.write(f"{row.get('date')} - {row.get('employee')}: {row.get('problem')}\n")
+        return response
+
+    rows = _patch_get_week_rows(week_start, standard_hours)
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
+    writer = csv.writer(response)
+
+    # Sage Payroll IE single-timesheet import order:
+    # period number, employee number, 0000, payment element 1, payment element 2, payment element 3.
+    # Values are decimal hours, not HH.MM. Example: 7h13m = 7.22.
+    for row in rows:
+        if int(row.get("paid_minutes", 0) or 0) == 0:
+            continue
+        writer.writerow([
+            period_number,
+            row["employee_number"],
+            "0000",
+            _dp31_minutes_to_decimal_string(row.get("normal_minutes", 0)),
+            _dp31_minutes_to_decimal_string(row.get("sunday_minutes", 0)),
+            _dp31_minutes_to_decimal_string(row.get("overtime_minutes", 0)),
+        ])
+
+    return response
 
 # -------------------------------------------------------------------
 # Delivery patch 33: payroll quick fixes + manager-friendly weekly review status
@@ -2136,10 +2911,96 @@ def _dp33_payroll_problem_rows(week_start):
     return rows
 
 
+@_dp31_login_required
+def payroll_problems(request):
+    if request.method == "POST":
+        return _dp33_apply_quick_fix(request)
+
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + _dp33_timedelta(days=6)
+    rows = _dp33_payroll_problem_rows(week_start)
+    return render(request, "payroll_problems.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "problem_count": len(rows),
+    })
 
 
+def _dp33_weekly_rows(week_start, standard_hours):
+    raw_rows = _patch_get_week_rows(week_start, standard_hours)
+    current_day = _dp33_current_operational_date()
+    week_end = week_start + _dp33_timedelta(days=6)
+    problem_rows = _dp33_payroll_problem_rows(week_start)
+    problem_map = {}
+    for problem in problem_rows:
+        problem_map.setdefault(problem["employee_number"], []).append(f"{problem['date'].strftime('%a')}: {problem['problem']}")
+
+    for row in raw_rows:
+        rostered_minutes = int(float(row.get("rostered_hours", 0) or 0) * 60)
+        paid_minutes = int(row.get("paid_minutes", 0) or 0)
+        difference_minutes = paid_minutes - rostered_minutes
+        problems = problem_map.get(row.get("employee_number"), [])
+        future_rostered = week_end >= current_day and rostered_minutes > paid_minutes and current_day <= week_end
+
+        if problems:
+            row["review_status"] = "Review"
+            row["review_reason"] = "; ".join(problems[:3])
+            row["status_css"] = "warn"
+        elif week_start <= current_day <= week_end and future_rostered:
+            row["review_status"] = "In progress"
+            row["review_reason"] = "Week not finished"
+            row["status_css"] = "progress"
+        elif rostered_minutes > 0 and paid_minutes == 0:
+            row["review_status"] = "Review"
+            row["review_reason"] = "Rostered but no paid hours"
+            row["status_css"] = "warn"
+        elif abs(difference_minutes) > 4 * 60:
+            row["review_status"] = "Review"
+            row["review_reason"] = f"Variance {_dp33_minutes_to_hours_label(abs(difference_minutes))}"
+            row["status_css"] = "warn"
+        elif abs(difference_minutes) > 60:
+            row["review_status"] = "Check"
+            row["review_reason"] = f"Variance {_dp33_minutes_to_hours_label(abs(difference_minutes))}"
+            row["status_css"] = "check"
+        else:
+            row["review_status"] = "OK"
+            row["review_reason"] = ""
+            row["status_css"] = "ok"
+
+    return raw_rows
 
 
+@_dp31_login_required
+def manager_weekly_summary(request):
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + _dp33_timedelta(days=6)
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    period_number = request.GET.get("period", "1")
+    summary_rows = _dp33_weekly_rows(week_start, standard_hours)
+    summary_rows, export_rows = _dp31_add_export_strings(summary_rows)
+    payroll_issue_rows = _dp33_payroll_problem_rows(week_start)
+    payroll_ready_bool = len(payroll_issue_rows) == 0
+
+    totals = {
+        "rostered": round(sum(float(r.get("rostered_hours", 0) or 0) for r in summary_rows), 2),
+        "paid": round(sum(float(r.get("paid_hours", 0) or 0) for r in summary_rows), 2),
+        "normal": round(sum(float(r.get("normal_hours", 0) or 0) for r in summary_rows), 2),
+        "sunday": round(sum(float(r.get("sunday_hours", 0) or 0) for r in summary_rows), 2),
+        "overtime": round(sum(float(r.get("overtime_hours", 0) or 0) for r in summary_rows), 2),
+    }
+
+    return render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_rows": summary_rows,
+        "export_rows": export_rows,
+        "standard_hours": standard_hours,
+        "period_number": period_number,
+        "payroll_problem_count": len(payroll_issue_rows),
+        "payroll_ready": payroll_ready_bool,
+        "totals": totals,
+    })
 
 # -------------------------------------------------------------------
 # Patch 34: Demo Week Simulator
@@ -2596,6 +3457,20 @@ def _dp36_payroll_problem_rows(week_start):
     return rows
 
 
+@_dp31_login_required
+def payroll_problems(request):
+    if request.method == "POST":
+        return _dp36_apply_quick_fix(request)
+
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + _dp36_timedelta(days=6)
+    rows = _dp36_payroll_problem_rows(week_start)
+    return render(request, "payroll_problems.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "problem_count": len(rows),
+    })
 
 
 def _dp36_weekly_rows(week_start, standard_hours):
@@ -2641,6 +3516,34 @@ def _dp36_weekly_rows(week_start, standard_hours):
     return raw_rows
 
 
+@_dp31_login_required
+def manager_weekly_summary(request):
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + _dp36_timedelta(days=6)
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+    period_number = request.GET.get("period", "1")
+    summary_rows = _dp36_weekly_rows(week_start, standard_hours)
+    summary_rows, export_rows = _dp31_add_export_strings(summary_rows)
+    payroll_issue_rows = _dp36_payroll_problem_rows(week_start)
+    payroll_ready_bool = len(payroll_issue_rows) == 0
+    totals = {
+        "rostered": round(sum(float(r.get("rostered_hours", 0) or 0) for r in summary_rows), 2),
+        "paid": round(sum(float(r.get("paid_hours", 0) or 0) for r in summary_rows), 2),
+        "normal": round(sum(float(r.get("normal_hours", 0) or 0) for r in summary_rows), 2),
+        "sunday": round(sum(float(r.get("sunday_hours", 0) or 0) for r in summary_rows), 2),
+        "overtime": round(sum(float(r.get("overtime_hours", 0) or 0) for r in summary_rows), 2),
+    }
+    return render(request, "weekly_summary.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary_rows": summary_rows,
+        "export_rows": export_rows,
+        "standard_hours": standard_hours,
+        "period_number": period_number,
+        "payroll_problem_count": len(payroll_issue_rows),
+        "payroll_ready": payroll_ready_bool,
+        "totals": totals,
+    })
 
 # -------------------------------------------------------------------
 # Delivery patch 38: one payroll issue engine + manager-first fixes
@@ -2903,6 +3806,20 @@ def _dp30_payroll_is_ready(week_start):
     return (len(rows) == 0), rows
 
 
+@_dp31_login_required
+def payroll_problems(request):
+    if request.method == "POST":
+        return _dp38_apply_quick_fix(request)
+
+    week_start = _patch_parse_week_start(request)
+    week_end = week_start + _dp36_timedelta(days=6)
+    rows = _dp38_payroll_problem_rows(week_start)
+    return _dp38_render(request, "payroll_problems.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "rows": rows,
+        "problem_count": len(rows),
+    })
 
 
 def _dp38_weekly_rows(week_start, standard_hours):
@@ -2952,6 +3869,32 @@ def _dp33_weekly_rows(week_start, standard_hours):
     return _dp38_weekly_rows(week_start, standard_hours)
 
 
+def export_sage_payroll_csv(request):
+    week_start = _patch_parse_week_start(request)
+    period_number = request.GET.get("period", "1")
+    standard_hours = float(request.GET.get("standard_hours", "39"))
+
+    payroll_ready_bool, payroll_problem_rows = _dp30_payroll_is_ready(week_start)
+    if not payroll_ready_bool:
+        response = _dp38_HttpResponse(content_type="text/plain", status=400)
+        response.write("Payroll is not ready. Fix the payroll issues shown on the Payroll Issues page.\n")
+        for row in payroll_problem_rows:
+            response.write(f"{row.get('date')} - {row.get('employee')}: {row.get('problem')}\n")
+        return response
+
+    rows = _patch_get_week_rows(week_start, standard_hours)
+    response = _dp38_HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="sage_payroll_export.csv"'
+    writer = _dp38_csv.writer(response)
+    for row in rows:
+        employee_number = row.get("employee_number")
+        normal = _dp31_minutes_to_decimal_string(row.get("normal_minutes", 0)) if "_dp31_minutes_to_decimal_string" in globals() else str(row.get("normal_hours", 0))
+        sunday = _dp31_minutes_to_decimal_string(row.get("sunday_minutes", 0)) if "_dp31_minutes_to_decimal_string" in globals() else str(row.get("sunday_hours", 0))
+        overtime = _dp31_minutes_to_decimal_string(row.get("overtime_minutes", 0)) if "_dp31_minutes_to_decimal_string" in globals() else str(row.get("overtime_hours", 0))
+        if normal == "0.00" and sunday == "0.00" and overtime == "0.00":
+            continue
+        writer.writerow([period_number, employee_number, "0000", normal, sunday, overtime])
+    return response
 
 # -------------------------------------------------------------------
 # Patch 45: final payroll source-of-truth overrides
