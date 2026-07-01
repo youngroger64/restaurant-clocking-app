@@ -1,4 +1,3 @@
-from .auth_views import ManagerLoginView, manager_logout
 from .clocking_views import smart_clock_page
 from django.urls import path
 
@@ -15,6 +14,8 @@ from .views import (
     payroll_problems,
     manager_add_missing_event,
     manager_fix_day,
+    ManagerLoginView,
+    manager_logout,
     manager_corrections,
     roster_manager,
     roster_add_shift,
