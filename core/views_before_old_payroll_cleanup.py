@@ -1944,9 +1944,1023 @@ def _dp30_break_attention_rows(rows):
 # -------------------------------------------------------------------
 # Delivery patch 33: payroll quick fixes + manager-friendly weekly review status
 # -------------------------------------------------------------------
+from datetime import datetime as _dp33_datetime, timedelta as _dp33_timedelta
+from django.contrib import messages as _dp33_messages
+from django.shortcuts import redirect as _dp33_redirect
+from core.models import RosterShift as _dp33_RosterShift, ClockEvent as _dp33_ClockEvent, Employee as _dp33_Employee
+from core.compliance import calculate_employee_day as _dp33_calculate_employee_day
+from core.compliance import current_operational_date as _dp33_current_operational_date
 
-# Old patch-era payroll code removed. Active payroll lives in core/services/payroll.py
 
+def _dp33_hours(minutes):
+    return round((int(minutes or 0)) / 60, 2)
+
+
+def _dp33_minutes_to_hours_label(minutes):
+    minutes = int(minutes or 0)
+    hours = minutes // 60
+    mins = minutes % 60
+    if hours and mins:
+        return f"{hours}h {mins}m"
+    if hours:
+        return f"{hours}h"
+    return f"{mins}m"
+
+
+def _dp33_make_aware(day, clock_time):
+    return timezone.make_aware(_dp33_datetime.combine(day, clock_time))
+
+
+def _dp33_shift_datetimes(employee, day):
+    shifts = list(_dp33_RosterShift.objects.filter(employee=employee, shift_date=day).order_by("start_time"))
+    if not shifts:
+        return None
+    first = shifts[0]
+    last = shifts[-1]
+    start_dt = _dp33_make_aware(day, first.start_time)
+    end_dt = _dp33_make_aware(day, last.end_time)
+    if end_dt <= start_dt:
+        end_dt += _dp33_timedelta(days=1)
+    return {
+        "start": start_dt,
+        "end": end_dt,
+        "start_label": start_dt.strftime("%H:%M"),
+        "end_label": end_dt.strftime("%H:%M"),
+        "roster_label": f"{first.start_time.strftime('%H:%M')} - {last.end_time.strftime('%H:%M')}",
+    }
+
+
+def _dp33_has_clock(employee, day, clock_type):
+    start, end = operational_window(day)
+    return _dp33_ClockEvent.objects.filter(employee=employee, timestamp__gte=start, timestamp__lt=end, clock_type=clock_type).exists()
+
+
+def _dp33_create_manager_event(employee, clock_type, timestamp, note):
+    return _dp33_ClockEvent.objects.create(
+        employee=employee,
+        clock_type=clock_type,
+        timestamp=timestamp,
+        method="MANAGER",
+        notes=f"Manager quick fix: {note}",
+    )
+
+
+def _dp33_apply_quick_fix(request):
+    mode = request.POST.get("mode")
+    employee_number = request.POST.get("employee_number")
+    day_raw = request.POST.get("event_date")
+    week_start = request.POST.get("week_start") or ""
+    employee = _patch_get_object_or_404(_dp33_Employee, employee_number=employee_number)
+    day = _dp33_datetime.strptime(day_raw, "%Y-%m-%d").date()
+    shift = _dp33_shift_datetimes(employee, day)
+
+    try:
+        if mode == "use_roster_start":
+            if not shift:
+                _dp33_messages.error(request, "No roster start time found for this shift.")
+            elif _dp33_has_clock(employee, day, "IN"):
+                _dp33_messages.info(request, f"{employee.name} already has a clock-in for this day.")
+            else:
+                _dp33_create_manager_event(employee, "IN", shift["start"], f"used roster start {shift['start_label']}")
+                _dp33_messages.success(request, f"Added clock-in for {employee.name} at roster start {shift['start_label']}.")
+
+        elif mode == "use_roster_finish":
+            if not shift:
+                _dp33_messages.error(request, "No roster finish time found for this shift.")
+            elif _dp33_has_clock(employee, day, "OUT"):
+                _dp33_messages.info(request, f"{employee.name} already has a clock-out for this day.")
+            else:
+                _dp33_create_manager_event(employee, "OUT", shift["end"], f"used roster finish {shift['end_label']}")
+                _dp33_messages.success(request, f"Added clock-out for {employee.name} at roster finish {shift['end_label']}.")
+
+        elif mode == "use_roster_shift":
+            if not shift:
+                _dp33_messages.error(request, "No roster shift found for this employee on this day.")
+            else:
+                added = []
+                if not _dp33_has_clock(employee, day, "IN"):
+                    _dp33_create_manager_event(employee, "IN", shift["start"], f"used roster shift start {shift['start_label']}")
+                    added.append(f"in {shift['start_label']}")
+                if not _dp33_has_clock(employee, day, "OUT"):
+                    _dp33_create_manager_event(employee, "OUT", shift["end"], f"used roster shift finish {shift['end_label']}")
+                    added.append(f"out {shift['end_label']}")
+                if added:
+                    _dp33_messages.success(request, f"Added {employee.name}: " + ", ".join(added) + ".")
+                else:
+                    _dp33_messages.info(request, f"{employee.name} already has clock-in and clock-out records for this day.")
+
+        elif mode == "enter_actual_time":
+            clock_type = request.POST.get("clock_type")
+            actual_time = request.POST.get("actual_time")
+            if clock_type not in ["IN", "OUT"]:
+                _dp33_messages.error(request, "Choose clock-in or clock-out.")
+            elif not actual_time:
+                _dp33_messages.error(request, "Enter the actual time.")
+            else:
+                target_dt = _dp33_make_aware(day, _dp33_datetime.strptime(actual_time, "%H:%M").time())
+                if shift and clock_type == "OUT" and target_dt <= shift["start"]:
+                    target_dt += _dp33_timedelta(days=1)
+                _dp33_create_manager_event(employee, clock_type, target_dt, f"entered actual {clock_type.lower()} time {actual_time}")
+                label = "clock-in" if clock_type == "IN" else "clock-out"
+                _dp33_messages.success(request, f"Added {label} for {employee.name} at {actual_time}.")
+
+        else:
+            _dp33_messages.error(request, "Unknown quick fix.")
+
+    except Exception as exc:
+        _dp33_messages.error(request, f"Could not apply quick fix: {exc}")
+
+    return _dp33_redirect(f"/manager/payroll-problems/?week_start={week_start}")
+
+
+def _dp33_payroll_problem_rows(week_start):
+    rows = []
+    today = _dp33_current_operational_date()
+    for employee in _dp33_Employee.objects.filter(active=True).order_by("name"):
+        for i in range(7):
+            day = week_start + _dp33_timedelta(days=i)
+            if day > today:
+                continue
+            d = _dp33_calculate_employee_day(employee, day, include_live=True)
+            shift = _dp33_shift_datetimes(employee, day)
+            problems = []
+            quick = []
+
+            if d.get("rostered") and not d.get("has_activity") and day < today:
+                problems.append("No clock records")
+                if shift:
+                    quick.append({"mode": "use_roster_shift", "label": f"Use roster {shift['roster_label']}"})
+                    quick.append({"mode": "enter_actual_time", "label": "Enter actual times", "clock_type": "IN"})
+
+            if d.get("missing_clock_out"):
+                problems.append("Missing clock-out")
+                if shift:
+                    quick.append({"mode": "use_roster_finish", "label": f"Use finish {shift['end_label']}"})
+                quick.append({"mode": "enter_actual_time", "label": "Enter actual finish", "clock_type": "OUT"})
+
+            if d.get("invalid_sequence"):
+                problems.append("Check clock events")
+
+            if d.get("is_urgent"):
+                for part in str(d.get("issue") or "").split(";"):
+                    part = part.strip()
+                    if part:
+                        problems.append(part)
+
+            if d.get("worked_minutes", 0) > 12 * 60:
+                problems.append("Long shift")
+
+            if d.get("has_activity") and not d.get("rostered"):
+                problems.append("Unrostered shift")
+
+            # Remove duplicates while keeping order.
+            problems = list(dict.fromkeys([p for p in problems if p and p != "OK"]))
+            if not problems:
+                continue
+
+            if not quick:
+                quick.append({"mode": "advanced", "label": "Advanced edit"})
+
+            rows.append({
+                "date": day,
+                "employee_number": employee.employee_number,
+                "employee": employee.name,
+                "roster": d.get("roster"),
+                "status": d.get("status"),
+                "worked_hours": d.get("worked_hours"),
+                "break_minutes": d.get("break_minutes"),
+                "break_status": d.get("break_status"),
+                "problem": "; ".join(problems),
+                "quick_actions": quick,
+            })
+    return rows
+
+
+
+
+
+
+
+# -------------------------------------------------------------------
+# Patch 34: Demo Week Simulator
+# -------------------------------------------------------------------
+# Purpose: create a realistic demo week from the uploaded roster so the
+# product can be shown end-to-end: roster -> clocking -> payroll issues
+# -> quick fixes -> Sage export.
+
+from django.contrib.auth.decorators import login_required as _demo_login_required
+
+
+def _demo_week_monday(d=None):
+    from django.utils import timezone as _tz
+    if d is None:
+        d = _tz.localdate()
+    return d - timedelta(days=d.weekday())
+
+
+def _demo_shift_datetimes(shift):
+    """Return aware start/end datetimes for a roster shift, handling overnight shifts."""
+    from datetime import datetime as _dt, timedelta as _td
+    from django.utils import timezone as _tz
+
+    start = _dt.combine(shift.shift_date, shift.start_time)
+    end = _dt.combine(shift.shift_date, shift.end_time)
+    if end <= start:
+        end = end + _td(days=1)
+    return _tz.make_aware(start), _tz.make_aware(end)
+
+
+def _demo_add_event(employee, clock_type, when, note):
+    ClockEvent.objects.create(
+        employee=employee,
+        clock_type=clock_type,
+        timestamp=when,
+        method="DEMO",
+        notes=note,
+    )
+
+
+def _demo_make_normal_shift(shift, late_mins=0, finish_delta_mins=0, add_break=True, note="Demo shift"):
+    from datetime import timedelta as _td
+    start, end = _demo_shift_datetimes(shift)
+    employee = shift.employee
+    in_time = start + _td(minutes=late_mins)
+    out_time = end + _td(minutes=finish_delta_mins)
+
+    _demo_add_event(employee, "IN", in_time, note)
+
+    shift_minutes = max(0, int((out_time - in_time).total_seconds() // 60))
+    if add_break and shift_minutes > 270:
+        # Normal restaurant-style break around the middle of the shift.
+        break_start = in_time + _td(minutes=min(270, max(180, shift_minutes // 2)))
+        break_length = 30 if shift_minutes > 360 else 15
+        break_end = break_start + _td(minutes=break_length)
+        if break_end < out_time:
+            _demo_add_event(employee, "BREAK_START", break_start, note)
+            _demo_add_event(employee, "BREAK_END", break_end, note)
+
+    _demo_add_event(employee, "OUT", out_time, note)
+
+
+def _demo_clear_week_events(week_start):
+    from datetime import datetime as _dt, time as _time, timedelta as _td
+    from django.utils import timezone as _tz
+    start_dt = _tz.make_aware(_dt.combine(week_start, _time.min))
+    end_dt = start_dt + _td(days=8)  # includes overnight Sunday shifts
+    return ClockEvent.objects.filter(
+        timestamp__gte=start_dt,
+        timestamp__lt=end_dt,
+        method="DEMO",
+    ).delete()[0]
+
+
+def _demo_create_week(week_start, scenario):
+    from datetime import datetime as _dt, time as _time, timedelta as _td
+    from django.utils import timezone as _tz
+
+    week_end = week_start + _td(days=6)
+    shifts = list(
+        RosterShift.objects.select_related("employee")
+        .filter(shift_date__gte=week_start, shift_date__lte=week_end, employee__active=True)
+        .order_by("shift_date", "start_time", "employee__name")
+    )
+
+    if not shifts:
+        return {"created": 0, "message": "No roster shifts found for this week."}
+
+    _demo_clear_week_events(week_start)
+    created_before = ClockEvent.objects.filter(method="DEMO").count()
+
+    # Pick a small number of realistic issues. The demo should show value without
+    # making the app look chaotic.
+    issue_counts = {
+        "clean": {"missing_out": 0, "no_records": 0, "missed_break": 0, "worked_late": 0, "late": 0, "cover": 0},
+        "normal": {"missing_out": 1, "no_records": 1, "missed_break": 1, "worked_late": 1, "late": 2, "cover": 1},
+        "messy": {"missing_out": 2, "no_records": 2, "missed_break": 2, "worked_late": 2, "late": 4, "cover": 1},
+    }.get(scenario, {"missing_out": 1, "no_records": 1, "missed_break": 1, "worked_late": 1, "late": 2, "cover": 1})
+
+    assigned = set()
+    notes = []
+
+    def take_shift(label):
+        for s in shifts:
+            if s.id not in assigned:
+                assigned.add(s.id)
+                notes.append(label)
+                return s
+        return None
+
+    # Missing clock-out: very common. Staff clock in, but no OUT event.
+    for _ in range(issue_counts["missing_out"]):
+        s = take_shift("Missing clock-out")
+        if s:
+            start, end = _demo_shift_datetimes(s)
+            _demo_add_event(s.employee, "IN", start + _td(minutes=3), "Demo: forgot to clock out")
+            if int((end - start).total_seconds() // 60) > 270:
+                b = start + _td(hours=4)
+                _demo_add_event(s.employee, "BREAK_START", b, "Demo: forgot to clock out")
+                _demo_add_event(s.employee, "BREAK_END", b + _td(minutes=30), "Demo: forgot to clock out")
+
+    # No records for a rostered shift: common enough when someone forgets to clock in.
+    for _ in range(issue_counts["no_records"]):
+        s = take_shift("No clock records")
+        if s:
+            # Intentionally create no events. Payroll quick fix should offer Use roster shift.
+            pass
+
+    # Missed break: staff worked the shift but did not record a break.
+    for _ in range(issue_counts["missed_break"]):
+        s = take_shift("Missed break")
+        if s:
+            _demo_make_normal_shift(s, late_mins=0, finish_delta_mins=0, add_break=False, note="Demo: no break recorded")
+
+    # Worked late: actual time should usually be accepted by manager.
+    for _ in range(issue_counts["worked_late"]):
+        s = take_shift("Worked late")
+        if s:
+            _demo_make_normal_shift(s, late_mins=0, finish_delta_mins=35, add_break=True, note="Demo: worked late")
+
+    # Late arrival: common, but not always a payroll blocker.
+    for i in range(issue_counts["late"]):
+        s = take_shift("Late arrival")
+        if s:
+            _demo_make_normal_shift(s, late_mins=8 + (i * 7), finish_delta_mins=0, add_break=True, note="Demo: arrived late")
+
+    # Everything else is clean.
+    for s in shifts:
+        if s.id not in assigned:
+            _demo_make_normal_shift(s, late_mins=0, finish_delta_mins=0, add_break=True, note="Demo: clean shift")
+
+    # One unrostered cover shift if there is a suitable employee.
+    if issue_counts["cover"]:
+        employee = Employee.objects.filter(active=True).order_by("name").first()
+        if employee:
+            cover_day = week_start + _td(days=2)
+            cover_start = _tz.make_aware(_dt.combine(cover_day, _time(18, 0)))
+            cover_end = cover_start + _td(hours=3)
+            _demo_add_event(employee, "IN", cover_start, "Demo: unrostered cover shift")
+            _demo_add_event(employee, "OUT", cover_end, "Demo: unrostered cover shift")
+            notes.append("Unrostered cover shift")
+
+    created_after = ClockEvent.objects.filter(method="DEMO").count()
+    return {
+        "created": max(0, created_after - created_before),
+        "message": f"Demo week created from {len(shifts)} roster shifts.",
+        "notes": notes,
+    }
+
+
+@_demo_login_required
+def manager_demo_week_simulator(request):
+    from datetime import datetime as _dt, timedelta as _td
+    from django.contrib import messages as _messages
+    from django.shortcuts import redirect as _redirect
+    from django.urls import reverse as _reverse
+    from django.utils import timezone as _tz
+
+    default_week = _demo_week_monday(_tz.localdate())
+    week_start_raw = request.POST.get("week_start") or request.GET.get("week_start") or default_week.isoformat()
+    try:
+        week_start = _dt.strptime(week_start_raw, "%Y-%m-%d").date()
+    except ValueError:
+        week_start = default_week
+    week_end = week_start + _td(days=6)
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "clear":
+            deleted = _demo_clear_week_events(week_start)
+            _messages.success(request, f"Demo clock events cleared for this week ({deleted} event(s) removed).")
+            return _redirect(f"{_reverse('manager_demo_week_simulator')}?week_start={week_start.isoformat()}")
+        if action == "simulate":
+            scenario = request.POST.get("scenario", "normal")
+            result = _demo_create_week(week_start, scenario)
+            if result["created"]:
+                _messages.success(request, f"{result['message']} {result['created']} demo clock event(s) created.")
+            else:
+                _messages.warning(request, result["message"])
+            return _redirect(f"{_reverse('manager_demo_week_simulator')}?week_start={week_start.isoformat()}")
+
+    roster_count = RosterShift.objects.filter(shift_date__gte=week_start, shift_date__lte=week_end).count()
+    demo_event_count = ClockEvent.objects.filter(
+        method="DEMO",
+        timestamp__date__gte=week_start,
+        timestamp__date__lte=week_end + _td(days=1),
+    ).count()
+    sample_shifts = list(
+        RosterShift.objects.select_related("employee")
+        .filter(shift_date__gte=week_start, shift_date__lte=week_end)
+        .order_by("shift_date", "start_time", "employee__name")[:12]
+    )
+
+    return render(request, "manager_demo_week.html", {
+        "week_start": week_start,
+        "week_end": week_end,
+        "roster_count": roster_count,
+        "demo_event_count": demo_event_count,
+        "sample_shifts": sample_shifts,
+    })
+
+# -------------------------------------------------------------------
+# Delivery patch 36: manager-first payroll quick fixes
+# -------------------------------------------------------------------
+from datetime import datetime as _dp36_datetime, timedelta as _dp36_timedelta, time as _dp36_time
+from django.contrib import messages as _dp36_messages
+from django.shortcuts import redirect as _dp36_redirect
+from django.utils import timezone as _dp36_timezone
+from core.models import Employee as _dp36_Employee, ClockEvent as _dp36_ClockEvent, RosterShift as _dp36_RosterShift
+from core.compliance import calculate_employee_day as _dp36_calculate_employee_day
+
+
+def _dp36_parse_day(day_raw):
+    return _dp36_datetime.strptime(day_raw, "%Y-%m-%d").date()
+
+
+def _dp36_make_aware(day, clock_time):
+    return _dp36_timezone.make_aware(_dp36_datetime.combine(day, clock_time))
+
+
+def _dp36_service_window(day):
+    """Restaurant service day: 05:00 to 05:00 next day."""
+    start = _dp36_timezone.make_aware(_dp36_datetime.combine(day, _dp36_time(5, 0)))
+    end = start + _dp36_timedelta(days=1)
+    return start, end
+
+
+def _dp36_events(employee, day):
+    start, end = _dp36_service_window(day)
+    return list(_dp36_ClockEvent.objects.filter(employee=employee, timestamp__gte=start, timestamp__lt=end).order_by("timestamp"))
+
+
+def _dp36_has_event(employee, day, clock_type):
+    start, end = _dp36_service_window(day)
+    return _dp36_ClockEvent.objects.filter(employee=employee, timestamp__gte=start, timestamp__lt=end, clock_type=clock_type).exists()
+
+
+def _dp36_roster_shift(employee, day):
+    shifts = list(_dp36_RosterShift.objects.filter(employee=employee, shift_date=day).order_by("start_time"))
+    if not shifts:
+        return None
+    first = shifts[0]
+    last = shifts[-1]
+    start_dt = _dp36_make_aware(day, first.start_time)
+    end_dt = _dp36_make_aware(day, last.end_time)
+    if end_dt <= start_dt:
+        end_dt += _dp36_timedelta(days=1)
+    minutes = int((end_dt - start_dt).total_seconds() // 60)
+    return {
+        "start": start_dt,
+        "end": end_dt,
+        "start_label": first.start_time.strftime("%H:%M"),
+        "end_label": last.end_time.strftime("%H:%M"),
+        "label": f"{first.start_time.strftime('%H:%M')} - {last.end_time.strftime('%H:%M')}",
+        "hours_label": f"{round(minutes / 60, 2)}h",
+        "break_minutes": getattr(first, "break_minutes", 0) or 0,
+    }
+
+
+def _dp36_create_event(employee, clock_type, timestamp, note):
+    return _dp36_ClockEvent.objects.create(
+        employee=employee,
+        clock_type=clock_type,
+        timestamp=timestamp,
+        method="MANAGER",
+        notes=f"Manager quick fix: {note}",
+    )
+
+
+def _dp36_first_in_last_out(employee, day):
+    events = _dp36_events(employee, day)
+    ins = [e for e in events if e.clock_type == "IN"]
+    outs = [e for e in events if e.clock_type == "OUT"]
+    return (ins[0] if ins else None), (outs[-1] if outs else None)
+
+
+def _dp36_apply_quick_fix(request):
+    mode = request.POST.get("mode")
+    employee_number = request.POST.get("employee_number")
+    day_raw = request.POST.get("event_date")
+    week_start = request.POST.get("week_start") or ""
+
+    employee = _patch_get_object_or_404(_dp36_Employee, employee_number=employee_number)
+    day = _dp36_parse_day(day_raw)
+    shift = _dp36_roster_shift(employee, day)
+
+    try:
+        if mode == "pay_roster_shift":
+            if not shift:
+                _dp36_messages.error(request, "No roster shift found for this employee.")
+            else:
+                added = []
+                if not _dp36_has_event(employee, day, "IN"):
+                    _dp36_create_event(employee, "IN", shift["start"], f"paid roster shift start {shift['start_label']}")
+                    added.append(f"clock-in {shift['start_label']}")
+                if not _dp36_has_event(employee, day, "OUT"):
+                    _dp36_create_event(employee, "OUT", shift["end"], f"paid roster shift finish {shift['end_label']}")
+                    added.append(f"clock-out {shift['end_label']}")
+                if added:
+                    _dp36_messages.success(request, f"{employee.name}: roster shift used for payroll ({shift['label']}).")
+                else:
+                    _dp36_messages.info(request, f"{employee.name}: roster shift already has clock records.")
+
+        elif mode == "clock_out_roster_finish":
+            if not shift:
+                _dp36_messages.error(request, "No roster finish time found for this shift.")
+            elif _dp36_has_event(employee, day, "OUT"):
+                _dp36_messages.info(request, f"{employee.name} already has a clock-out for this day.")
+            else:
+                _dp36_create_event(employee, "OUT", shift["end"], f"clocked out at roster finish {shift['end_label']}")
+                _dp36_messages.success(request, f"{employee.name}: clock-out added at {shift['end_label']}.")
+
+        elif mode == "enter_actual_finish":
+            actual_time = request.POST.get("actual_time")
+            if not actual_time:
+                _dp36_messages.error(request, "Enter the finish time.")
+            else:
+                target_dt = _dp36_make_aware(day, _dp36_datetime.strptime(actual_time, "%H:%M").time())
+                if shift and target_dt <= shift["start"]:
+                    target_dt += _dp36_timedelta(days=1)
+                _dp36_create_event(employee, "OUT", target_dt, f"entered actual finish {actual_time}")
+                _dp36_messages.success(request, f"{employee.name}: clock-out added at {actual_time}.")
+
+        elif mode == "enter_actual_shift":
+            start_time = request.POST.get("start_time")
+            finish_time = request.POST.get("finish_time")
+            if not start_time or not finish_time:
+                _dp36_messages.error(request, "Enter both start and finish times.")
+            else:
+                start_dt = _dp36_make_aware(day, _dp36_datetime.strptime(start_time, "%H:%M").time())
+                finish_dt = _dp36_make_aware(day, _dp36_datetime.strptime(finish_time, "%H:%M").time())
+                if finish_dt <= start_dt:
+                    finish_dt += _dp36_timedelta(days=1)
+                if not _dp36_has_event(employee, day, "IN"):
+                    _dp36_create_event(employee, "IN", start_dt, f"entered actual start {start_time}")
+                if not _dp36_has_event(employee, day, "OUT"):
+                    _dp36_create_event(employee, "OUT", finish_dt, f"entered actual finish {finish_time}")
+                _dp36_messages.success(request, f"{employee.name}: actual shift added ({start_time} - {finish_time}).")
+
+        elif mode == "approve_unrostered_shift":
+            first_in, last_out = _dp36_first_in_last_out(employee, day)
+            if not first_in or not last_out:
+                _dp36_messages.error(request, "This shift needs a start and finish time before it can be approved.")
+            elif _dp36_RosterShift.objects.filter(employee=employee, shift_date=day).exists():
+                _dp36_messages.info(request, f"{employee.name} already has a roster shift for this day.")
+            else:
+                start_time = _dp36_timezone.localtime(first_in.timestamp).time().replace(second=0, microsecond=0)
+                finish_time = _dp36_timezone.localtime(last_out.timestamp).time().replace(second=0, microsecond=0)
+                _dp36_RosterShift.objects.create(
+                    employee=employee,
+                    shift_date=day,
+                    start_time=start_time,
+                    end_time=finish_time,
+                    break_minutes=0,
+                )
+                _dp36_messages.success(request, f"{employee.name}: unrostered shift approved for payroll.")
+
+        else:
+            _dp36_messages.error(request, "Unknown quick fix.")
+
+    except Exception as exc:
+        _dp36_messages.error(request, f"Could not apply quick fix: {exc}")
+
+    return _dp36_redirect(f"/manager/payroll-problems/?week_start={week_start}")
+
+
+def _dp36_payroll_problem_rows(week_start):
+    rows = []
+    today = _dp33_current_operational_date() if "_dp33_current_operational_date" in globals() else _dp36_timezone.localdate()
+
+    for employee in _dp36_Employee.objects.filter(active=True).order_by("name"):
+        for i in range(7):
+            day = week_start + _dp36_timedelta(days=i)
+            if day > today:
+                continue
+
+            d = _dp36_calculate_employee_day(employee, day, include_live=True)
+            shift = _dp36_roster_shift(employee, day)
+            problems = []
+            quick = []
+
+            # True payroll blockers only. Break warnings are not payroll blockers.
+            if d.get("rostered") and not d.get("has_activity") and day < today:
+                problems.append("No clock records")
+                if shift:
+                    quick.append({"mode": "pay_roster_shift", "label": f"Pay roster shift ({shift['label']})"})
+                    quick.append({"mode": "enter_actual_shift", "label": "Enter actual times"})
+
+            if d.get("missing_clock_out"):
+                problems.append("Missing clock-out")
+                if shift:
+                    quick.append({"mode": "clock_out_roster_finish", "label": f"Clock out at {shift['end_label']}"})
+                quick.append({"mode": "enter_actual_finish", "label": "Enter finish"})
+
+            if d.get("invalid_sequence"):
+                problems.append("Check clock events")
+
+            if d.get("worked_minutes", 0) > 12 * 60:
+                problems.append("Long shift")
+
+            if d.get("has_activity") and not d.get("rostered"):
+                problems.append("Unrostered shift")
+                first_in, last_out = _dp36_first_in_last_out(employee, day)
+                if first_in and last_out and not d.get("invalid_sequence"):
+                    quick.append({"mode": "approve_unrostered_shift", "label": "Approve shift"})
+
+            # Remove duplicates and ignore break/compliance warnings on the payroll blocker page.
+            cleaned = []
+            for p in problems:
+                if not p or p == "OK":
+                    continue
+                if "break" in p.lower():
+                    continue
+                if p not in cleaned:
+                    cleaned.append(p)
+            problems = cleaned
+
+            if not problems:
+                continue
+
+            if not quick:
+                quick.append({"mode": "advanced", "label": "Review"})
+
+            rows.append({
+                "date": day,
+                "employee_number": employee.employee_number,
+                "employee": employee.name,
+                "roster": d.get("roster"),
+                "status": d.get("status"),
+                "worked_hours": d.get("worked_hours"),
+                "problem": "; ".join(problems),
+                "quick_actions": quick,
+            })
+    return rows
+
+
+
+
+def _dp36_weekly_rows(week_start, standard_hours):
+    raw_rows = _patch_get_week_rows(week_start, standard_hours)
+    current_day = _dp33_current_operational_date() if "_dp33_current_operational_date" in globals() else _dp36_timezone.localdate()
+    week_end = week_start + _dp36_timedelta(days=6)
+    problem_rows = _dp36_payroll_problem_rows(week_start)
+    problem_map = {}
+    for problem in problem_rows:
+        problem_map.setdefault(problem["employee_number"], []).append(f"{problem['date'].strftime('%a')}: {problem['problem']}")
+
+    for row in raw_rows:
+        rostered_minutes = int(float(row.get("rostered_hours", 0) or 0) * 60)
+        paid_minutes = int(row.get("paid_minutes", 0) or 0)
+        difference_minutes = paid_minutes - rostered_minutes
+        problems = problem_map.get(row.get("employee_number"), [])
+        future_rostered = week_end >= current_day and rostered_minutes > paid_minutes and current_day <= week_end
+
+        if problems:
+            row["review_status"] = "Review"
+            row["review_reason"] = "; ".join(problems[:3])
+            row["status_css"] = "warn"
+        elif week_start <= current_day <= week_end and future_rostered:
+            row["review_status"] = "In progress"
+            row["review_reason"] = "Week not finished"
+            row["status_css"] = "progress"
+        elif rostered_minutes > 0 and paid_minutes == 0 and week_end < current_day:
+            row["review_status"] = "Review"
+            row["review_reason"] = "Rostered but no paid hours"
+            row["status_css"] = "warn"
+        elif abs(difference_minutes) > 4 * 60 and week_end < current_day:
+            row["review_status"] = "Review"
+            row["review_reason"] = f"Variance {_dp33_minutes_to_hours_label(abs(difference_minutes)) if '_dp33_minutes_to_hours_label' in globals() else round(abs(difference_minutes)/60,2)}"
+            row["status_css"] = "warn"
+        elif abs(difference_minutes) > 60 and week_end < current_day:
+            row["review_status"] = "Check"
+            row["review_reason"] = f"Variance {_dp33_minutes_to_hours_label(abs(difference_minutes)) if '_dp33_minutes_to_hours_label' in globals() else round(abs(difference_minutes)/60,2)}"
+            row["status_css"] = "check"
+        else:
+            row["review_status"] = "OK"
+            row["review_reason"] = ""
+            row["status_css"] = "ok"
+    return raw_rows
+
+
+
+# -------------------------------------------------------------------
+# Delivery patch 38: one payroll issue engine + manager-first fixes
+# -------------------------------------------------------------------
+from datetime import datetime as _dp38_datetime, timedelta as _dp38_timedelta
+from django.contrib import messages as _dp38_messages
+from django.http import HttpResponse as _dp38_HttpResponse
+from django.shortcuts import redirect as _dp38_redirect, render as _dp38_render
+from django.utils import timezone as _dp38_timezone
+import csv as _dp38_csv
+
+
+def _dp38_event_minute(ev):
+    return _dp38_timezone.localtime(ev.timestamp).replace(second=0, microsecond=0)
+
+
+def _dp38_events_unique(employee, day):
+    """Return events with exact duplicate clock records collapsed for issue detection."""
+    unique = []
+    seen = set()
+    for ev in _dp36_events(employee, day):
+        key = (ev.clock_type, _dp38_event_minute(ev))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ev)
+    return unique
+
+
+def _dp38_first_and_last_any(employee, day):
+    events = _dp38_events_unique(employee, day)
+    if not events:
+        return None, None
+    return events[0], events[-1]
+
+
+def _dp38_first_in_last_out_unique(employee, day):
+    events = _dp38_events_unique(employee, day)
+    ins = [e for e in events if e.clock_type == "IN"]
+    outs = [e for e in events if e.clock_type == "OUT"]
+    return (ins[0] if ins else None), (outs[-1] if outs else None)
+
+
+def _dp38_sequence_problem(employee, day):
+    """Only flags genuinely odd payroll-blocking event sequences."""
+    events = _dp38_events_unique(employee, day)
+    if not events:
+        return False
+
+    # Valid simple payroll sequence after ignoring break events: IN ... OUT
+    work_events = [e.clock_type for e in events if e.clock_type in ("IN", "OUT")]
+    if not work_events:
+        return True
+    if work_events.count("IN") != 1 or work_events.count("OUT") != 1:
+        return True
+    if work_events[0] != "IN" or work_events[-1] != "OUT":
+        return True
+
+    # Breaks should not block payroll, but impossible ordering should be reviewed.
+    break_balance = 0
+    for ev in events:
+        if ev.clock_type == "BREAK_START":
+            break_balance += 1
+        elif ev.clock_type == "BREAK_END":
+            if break_balance <= 0:
+                return True
+            break_balance -= 1
+    return False
+
+
+def _dp38_delete_day_events(employee, day):
+    start, end = _dp36_service_window(day)
+    _dp36_ClockEvent.objects.filter(employee=employee, timestamp__gte=start, timestamp__lt=end).delete()
+
+
+def _dp38_create_clean_shift(employee, start_dt, end_dt, note):
+    if end_dt <= start_dt:
+        end_dt += _dp38_timedelta(days=1)
+    _dp36_create_event(employee, "IN", start_dt, f"{note} start")
+    _dp36_create_event(employee, "OUT", end_dt, f"{note} finish")
+
+
+def _dp38_apply_quick_fix(request):
+    mode = request.POST.get("mode")
+    employee_number = request.POST.get("employee_number")
+    day_raw = request.POST.get("event_date")
+    week_start = request.POST.get("week_start") or ""
+
+    employee = _patch_get_object_or_404(_dp36_Employee, employee_number=employee_number)
+    day = _dp36_parse_day(day_raw)
+    shift = _dp36_roster_shift(employee, day)
+
+    try:
+        if mode == "pay_roster_shift":
+            if not shift:
+                _dp38_messages.error(request, "No roster shift found for this employee.")
+            else:
+                _dp38_delete_day_events(employee, day)
+                _dp38_create_clean_shift(employee, shift["start"], shift["end"], f"paid roster hours {shift['label']}")
+                _dp38_messages.success(request, f"{employee.name}: paid roster hours ({shift['label']}).")
+
+        elif mode == "clock_out_roster_finish":
+            if not shift:
+                _dp38_messages.error(request, "No roster finish time found.")
+            else:
+                first_in, _last_out = _dp38_first_in_last_out_unique(employee, day)
+                # Keep the real clock-in where possible, but rebuild a clean payroll sequence.
+                start_dt = first_in.timestamp if first_in else shift["start"]
+                _dp38_delete_day_events(employee, day)
+                _dp38_create_clean_shift(employee, start_dt, shift["end"], f"clocked out at roster finish {shift['end_label']}")
+                _dp38_messages.success(request, f"{employee.name}: clocked out at {shift['end_label']}.")
+
+        elif mode == "enter_actual_finish":
+            actual = request.POST.get("actual_time")
+            if not actual:
+                _dp38_messages.error(request, "Enter the finish time.")
+            else:
+                finish_dt = _dp36_make_aware(day, _dp38_datetime.strptime(actual, "%H:%M").time())
+                first_in, _last_out = _dp38_first_in_last_out_unique(employee, day)
+                start_dt = first_in.timestamp if first_in else (shift["start"] if shift else None)
+                if not start_dt:
+                    _dp38_messages.error(request, "No start time found. Use Enter actual times instead.")
+                else:
+                    if finish_dt <= start_dt:
+                        finish_dt += _dp38_timedelta(days=1)
+                    _dp38_delete_day_events(employee, day)
+                    _dp38_create_clean_shift(employee, start_dt, finish_dt, f"actual finish entered by manager {actual}")
+                    _dp38_messages.success(request, f"{employee.name}: finish set to {actual}.")
+
+        elif mode == "enter_actual_shift":
+            start_raw = request.POST.get("start_time")
+            finish_raw = request.POST.get("finish_time")
+            if not start_raw or not finish_raw:
+                _dp38_messages.error(request, "Enter start and finish times.")
+            else:
+                start_dt = _dp36_make_aware(day, _dp38_datetime.strptime(start_raw, "%H:%M").time())
+                finish_dt = _dp36_make_aware(day, _dp38_datetime.strptime(finish_raw, "%H:%M").time())
+                _dp38_delete_day_events(employee, day)
+                _dp38_create_clean_shift(employee, start_dt, finish_dt, f"actual shift entered by manager {start_raw}-{finish_raw}")
+                _dp38_messages.success(request, f"{employee.name}: paid actual times {start_raw} - {finish_raw}.")
+
+        elif mode == "approve_unrostered_shift":
+            first_in, last_out = _dp38_first_in_last_out_unique(employee, day)
+            if not first_in or not last_out:
+                _dp38_messages.error(request, "This shift needs a clock-in and clock-out before it can be approved.")
+            else:
+                if not _dp36_roster_shift(employee, day):
+                    start_time = _dp38_timezone.localtime(first_in.timestamp).time().replace(second=0, microsecond=0)
+                    finish_time = _dp38_timezone.localtime(last_out.timestamp).time().replace(second=0, microsecond=0)
+                    _dp36_RosterShift.objects.create(
+                        employee=employee,
+                        shift_date=day,
+                        start_time=start_time,
+                        end_time=finish_time,
+                        break_minutes=0,
+                    )
+                _dp38_messages.success(request, f"{employee.name}: cover shift approved for payroll.")
+
+        elif mode == "pay_actual_time":
+            first, last = _dp38_first_and_last_any(employee, day)
+            if not first or not last or first.timestamp == last.timestamp:
+                _dp38_messages.error(request, "Not enough clock information. Enter actual times instead.")
+            else:
+                start_dt = first.timestamp
+                end_dt = last.timestamp
+                _dp38_delete_day_events(employee, day)
+                _dp38_create_clean_shift(employee, start_dt, end_dt, "paid actual clock span")
+                _dp38_messages.success(
+                    request,
+                    f"{employee.name}: paid actual time {_dp38_timezone.localtime(start_dt).strftime('%H:%M')} - {_dp38_timezone.localtime(end_dt).strftime('%H:%M')}.",
+                )
+
+        else:
+            _dp38_messages.error(request, "Unknown quick fix.")
+
+    except Exception as exc:
+        _dp38_messages.error(request, f"Could not apply quick fix: {exc}")
+
+    return _dp38_redirect(f"/manager/payroll-problems/?week_start={week_start}")
+
+
+def _dp38_payroll_problem_rows(week_start):
+    """Single issue list used by Payroll Issues, Weekly Review and Sage export."""
+    rows = []
+    today = _dp33_current_operational_date() if "_dp33_current_operational_date" in globals() else _dp36_timezone.localdate()
+
+    for employee in _dp36_Employee.objects.filter(active=True).order_by("name"):
+        for i in range(7):
+            day = week_start + _dp36_timedelta(days=i)
+            if day > today:
+                continue
+
+            d = _dp36_calculate_employee_day(employee, day, include_live=True)
+            shift = _dp36_roster_shift(employee, day)
+            events = _dp38_events_unique(employee, day)
+            first_in, last_out = _dp38_first_in_last_out_unique(employee, day)
+            problems = []
+            quick = []
+
+            # Common restaurant cases first. These are the things a manager can fix quickly.
+            if shift and not events and day < today:
+                problems.append("No clock records")
+                quick.append({"mode": "pay_roster_shift", "label": f"Pay roster hours ({shift['label']})"})
+                quick.append({"mode": "enter_actual_shift", "label": "Enter actual times"})
+
+            elif shift and first_in and not last_out:
+                problems.append("Missing clock-out")
+                quick.append({"mode": "clock_out_roster_finish", "label": f"Clock out at {shift['end_label']}"})
+                quick.append({"mode": "enter_actual_finish", "label": "Enter finish"})
+
+            elif events and not shift:
+                if first_in and last_out and not _dp38_sequence_problem(employee, day):
+                    problems.append("Unrostered shift")
+                    quick.append({"mode": "approve_unrostered_shift", "label": "Approve shift"})
+                else:
+                    problems.append("Check clock events")
+                    quick.append({"mode": "pay_actual_time", "label": "Pay actual time"})
+                    quick.append({"mode": "enter_actual_shift", "label": "Enter correct times"})
+
+            elif events and _dp38_sequence_problem(employee, day):
+                problems.append("Check clock events")
+                quick.append({"mode": "pay_actual_time", "label": "Pay actual time"})
+                quick.append({"mode": "enter_actual_shift", "label": "Enter correct times"})
+
+            # Long paid shifts are worth reviewing, but breaks alone do not block payroll.
+            if d.get("worked_minutes", 0) > 12 * 60:
+                problems.append("Long shift")
+
+            cleaned = []
+            for problem in problems:
+                if not problem:
+                    continue
+                if "break" in problem.lower():
+                    continue
+                if problem not in cleaned:
+                    cleaned.append(problem)
+            problems = cleaned
+
+            if not problems:
+                continue
+
+            if not quick:
+                quick.append({"mode": "advanced", "label": "Review"})
+
+            rows.append({
+                "date": day,
+                "employee_number": employee.employee_number,
+                "employee": employee.name,
+                "roster": d.get("roster"),
+                "status": d.get("status"),
+                "worked_hours": d.get("worked_hours"),
+                "problem": "; ".join(problems),
+                "quick_actions": quick,
+            })
+    return rows
+
+
+def _dp30_payroll_is_ready(week_start):
+    rows = _dp38_payroll_problem_rows(week_start)
+    return (len(rows) == 0), rows
+
+
+
+
+def _dp38_weekly_rows(week_start, standard_hours):
+    raw_rows = _patch_get_week_rows(week_start, standard_hours)
+    current_day = _dp33_current_operational_date() if "_dp33_current_operational_date" in globals() else _dp36_timezone.localdate()
+    week_end = week_start + _dp36_timedelta(days=6)
+    problem_rows = _dp38_payroll_problem_rows(week_start)
+    problem_map = {}
+    for problem in problem_rows:
+        problem_map.setdefault(problem["employee_number"], []).append(f"{problem['date'].strftime('%a')}: {problem['problem']}")
+
+    for row in raw_rows:
+        rostered_minutes = int(float(row.get("rostered_hours", 0) or 0) * 60)
+        paid_minutes = int(row.get("paid_minutes", 0) or 0)
+        difference_minutes = paid_minutes - rostered_minutes
+        problems = problem_map.get(row.get("employee_number"), [])
+        future_rostered = week_start <= current_day <= week_end and rostered_minutes > paid_minutes
+
+        if problems:
+            row["review_status"] = "Review"
+            row["review_reason"] = "; ".join(problems[:3])
+            row["status_css"] = "warn"
+        elif future_rostered:
+            row["review_status"] = "In progress"
+            row["review_reason"] = "Week not finished"
+            row["status_css"] = "progress"
+        elif rostered_minutes > 0 and paid_minutes == 0 and week_end < current_day:
+            row["review_status"] = "Review"
+            row["review_reason"] = "Rostered but no paid hours"
+            row["status_css"] = "warn"
+        elif abs(difference_minutes) > 4 * 60:
+            row["review_status"] = "Review"
+            row["review_reason"] = f"Variance {_dp33_minutes_to_hours_label(abs(difference_minutes))}" if "_dp33_minutes_to_hours_label" in globals() else "Large variance"
+            row["status_css"] = "warn"
+        elif abs(difference_minutes) > 60:
+            row["review_status"] = "Check"
+            row["review_reason"] = f"Variance {_dp33_minutes_to_hours_label(abs(difference_minutes))}" if "_dp33_minutes_to_hours_label" in globals() else "Variance"
+            row["status_css"] = "check"
+        else:
+            row["review_status"] = "OK"
+            row["review_reason"] = ""
+            row["status_css"] = "ok"
+    return raw_rows
+
+
+def _dp33_weekly_rows(week_start, standard_hours):
+    return _dp38_weekly_rows(week_start, standard_hours)
+
+
+
+# -------------------------------------------------------------------
+# Patch 45: final payroll source-of-truth overrides
+# -------------------------------------------------------------------
+# -------------------------------------------------------------------
+# Patch 48: manager-approved payroll rules and synced counts
+# -------------------------------------------------------------------
+# This replaces the Patch 45 final payroll block. It deliberately does not
+# append another copy of payroll views above this point.
 from django.contrib.auth.decorators import login_required as _p48_login_required
 from django.shortcuts import render as _p48_render
 from core.services.payroll import (

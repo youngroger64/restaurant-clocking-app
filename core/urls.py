@@ -17,7 +17,6 @@ from .views import (
     ManagerLoginView,
     manager_logout,
     manager_corrections,
-    manager_demo_week_simulator,
     roster_manager,
     roster_add_shift,
     roster_update_shift,
@@ -45,5 +44,4 @@ urlpatterns = [
     path('manager/add-missing-event/', manager_add_missing_event, name='manager_add_missing_event'),
     path('manager/fix-day/', manager_fix_day, name='manager_fix_day'),
     path('manager/corrections/', manager_corrections, name='manager_corrections'),
-    path('manager/demo-week/', manager_demo_week_simulator, name='manager_demo_week_simulator'),
 ]
