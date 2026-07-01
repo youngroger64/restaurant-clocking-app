@@ -1519,27 +1519,27 @@ def _patch_payroll_problem_rows(week_start):
 # Patch 15: Roster Manager helpers
 # -------------------------------------------------------------------
 
-from django.shortcuts import redirect as roster_redirect
-from django.views.decorators.http import require_POST as roster_require_POST
+from django.shortcuts import redirect as _patch15_redirect
+from django.views.decorators.http import require_POST as _patch15_require_POST
 
 
-def roster_current_week_start():
+def _patch15_current_week_start():
     today = timezone.localdate()
     return today - timedelta(days=today.weekday())
 
 
-def roster_week_start_from_request(request):
+def _patch15_week_start_from_request(request):
     raw = request.GET.get("week_start") or request.POST.get("week_start")
     if raw:
         return datetime.strptime(raw, "%Y-%m-%d").date()
-    return roster_current_week_start()
+    return _patch15_current_week_start()
 
 
 
 
-@roster_require_POST
+@_patch15_require_POST
 def roster_add_shift(request):
-    week_start = roster_week_start_from_request(request)
+    week_start = _patch15_week_start_from_request(request)
     employee_id = request.POST.get("employee_id")
     shift_date = request.POST.get("shift_date")
     start_time = request.POST.get("start_time")
@@ -1553,12 +1553,12 @@ def roster_add_shift(request):
         end_time=end_time,
     )
 
-    return roster_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}")
+    return _patch15_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}")
 
 
-@roster_require_POST
+@_patch15_require_POST
 def roster_update_shift(request, shift_id):
-    week_start = roster_week_start_from_request(request)
+    week_start = _patch15_week_start_from_request(request)
     shift = RosterShift.objects.get(id=shift_id)
     employee_id = request.POST.get("employee_id")
     start_time = request.POST.get("start_time")
@@ -1575,14 +1575,14 @@ def roster_update_shift(request, shift_id):
         shift.end_time = end_time
 
     shift.save()
-    return roster_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}")
+    return _patch15_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}")
 
 
-@roster_require_POST
+@_patch15_require_POST
 def roster_delete_shift(request, shift_id):
-    week_start = roster_week_start_from_request(request)
+    week_start = _patch15_week_start_from_request(request)
     RosterShift.objects.filter(id=shift_id).delete()
-    return roster_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}")
+    return _patch15_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}")
 
 # -------------------------------------------------------------------
 # Patch 16: safer roster manager upload
@@ -1590,11 +1590,11 @@ def roster_delete_shift(request, shift_id):
 # back to the roster manager so the uploaded roster is visible.
 # -------------------------------------------------------------------
 
-from django.contrib.auth.decorators import login_required as roster_login_required
-from django.shortcuts import redirect as roster_upload_redirect
+from django.contrib.auth.decorators import login_required as _patch16_login_required
+from django.shortcuts import redirect as _patch16_redirect
 
 
-def roster_parse_date(value):
+def _patch16_parse_date(value):
     value = (value or "").strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
@@ -1604,7 +1604,7 @@ def roster_parse_date(value):
     raise ValueError(f"Invalid date format: {value}. Use YYYY-MM-DD.")
 
 
-def roster_parse_time(value):
+def _patch16_parse_time(value):
     value = (value or "").strip()
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
@@ -1614,11 +1614,11 @@ def roster_parse_time(value):
     raise ValueError(f"Invalid time format: {value}. Use HH:MM.")
 
 
-def roster_week_start_for_date(day):
+def _patch16_week_start_for_date(day):
     return day - timedelta(days=day.weekday())
 
 
-@roster_login_required
+@_patch16_login_required
 def roster_manager(request):
     message = ""
     error = ""
@@ -1644,13 +1644,13 @@ def roster_manager(request):
 
             parsed_rows = []
             for row in reader:
-                shift_date = roster_parse_date(row.get("Date"))
+                shift_date = _patch16_parse_date(row.get("Date"))
                 parsed_rows.append({
                     "employee_number": (row.get("EmployeeNumber") or "").strip(),
                     "employee_name": (row.get("EmployeeName") or "").strip(),
                     "shift_date": shift_date,
-                    "start_time": roster_parse_time(row.get("StartTime")),
-                    "end_time": roster_parse_time(row.get("EndTime")),
+                    "start_time": _patch16_parse_time(row.get("StartTime")),
+                    "end_time": _patch16_parse_time(row.get("EndTime")),
                     "break_minutes": int((row.get("BreakMinutes") or "0").strip() or "0"),
                 })
 
@@ -1659,7 +1659,7 @@ def roster_manager(request):
 
             # Use the week of the first imported shift unless a week_start was explicitly supplied.
             if not raw_week_start:
-                week_start = roster_week_start_for_date(parsed_rows[0]["shift_date"])
+                week_start = _patch16_week_start_for_date(parsed_rows[0]["shift_date"])
 
             week_end = week_start + timedelta(days=6)
 
@@ -1694,7 +1694,7 @@ def roster_manager(request):
                 )
                 count += 1
 
-            return roster_upload_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}&uploaded={count}")
+            return _patch16_redirect(f"/manager/upload-roster/?week_start={week_start.isoformat()}&uploaded={count}")
 
         except Exception as exc:
             error = f"Roster upload failed: {exc}"
