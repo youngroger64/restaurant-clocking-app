@@ -1356,30 +1356,30 @@ def manager_corrections(request):
 # Delivery patch 01: row-level payroll corrections + safer payroll export
 # -------------------------------------------------------------------
 
-from django.contrib.auth.decorators import login_required as corrections_login_required
-from django.shortcuts import get_object_or_404 as corrections_get_object_or_404
-from django.http import HttpResponseRedirect as corrections_HttpResponseRedirect
-from core.compliance import calculate_employee_day as corrections_calculate_employee_day
-from core.compliance import get_week_rows as corrections_get_week_rows
+from django.contrib.auth.decorators import login_required as _patch_login_required
+from django.shortcuts import get_object_or_404 as _patch_get_object_or_404
+from django.http import HttpResponseRedirect as _patch_HttpResponseRedirect
+from core.compliance import calculate_employee_day as _patch_calculate_employee_day
+from core.compliance import get_week_rows as _patch_get_week_rows
 
 
-def corrections_current_week_start():
+def _patch_current_week_start():
     today = timezone.localdate()
     return today - timedelta(days=today.weekday())
 
 
-def corrections_parse_week_start(request):
+def _patch_parse_week_start(request):
     raw = request.GET.get("week_start") or request.POST.get("week_start")
     if raw:
         return datetime.strptime(raw, "%Y-%m-%d").date()
-    return corrections_current_week_start()
+    return _patch_current_week_start()
 
 
-@corrections_login_required
+@_patch_login_required
 def manager_fix_day(request):
     emp_no = request.GET.get("employee_number") or request.POST.get("employee_number")
     date_raw = request.GET.get("event_date") or request.POST.get("event_date")
-    week_start = corrections_parse_week_start(request)
+    week_start = _patch_parse_week_start(request)
 
     if not emp_no or not date_raw:
         return render(request, "manager_fix_day.html", {
@@ -1391,7 +1391,7 @@ def manager_fix_day(request):
             "week_start": week_start,
         })
 
-    employee = corrections_get_object_or_404(Employee, employee_number=emp_no)
+    employee = _patch_get_object_or_404(Employee, employee_number=emp_no)
     event_date = datetime.strptime(date_raw, "%Y-%m-%d").date()
     message = ""
     error = ""
@@ -1437,7 +1437,7 @@ def manager_fix_day(request):
 
         elif mode == "delete":
             event_id = request.POST.get("event_id")
-            event = corrections_get_object_or_404(ClockEvent, id=event_id, employee=employee, timestamp__date=event_date)
+            event = _patch_get_object_or_404(ClockEvent, id=event_id, employee=employee, timestamp__date=event_date)
             old = f"{timezone.localtime(event.timestamp).strftime('%H:%M')} {event.clock_type}"
             event.delete()
             message = f"Deleted event: {old}."
@@ -1446,7 +1446,7 @@ def manager_fix_day(request):
     for event in events:
         event.local_time = timezone.localtime(event.timestamp).strftime("H:%M").replace("H", "%H") if False else timezone.localtime(event.timestamp).strftime("%H:%M")
 
-    day = corrections_calculate_employee_day(employee, event_date, include_live=True)
+    day = _patch_calculate_employee_day(employee, event_date, include_live=True)
 
     return render(request, "manager_fix_day.html", {
         "employee": employee,
@@ -1472,7 +1472,7 @@ def _patch_payroll_problem_rows(week_start):
     for employee in Employee.objects.filter(active=True).order_by("name"):
         for i in range(7):
             day = week_start + timedelta(days=i)
-            d = corrections_calculate_employee_day(employee, day, include_live=True)
+            d = _patch_calculate_employee_day(employee, day, include_live=True)
             problems = []
 
             if d.get("missing_clock_out"):
