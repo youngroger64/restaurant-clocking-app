@@ -176,17 +176,17 @@ def _blocker_actions(issue, shift):
     if "missing clock-in" in issue_l:
         if shift:
             actions.append(_action("clock_in_roster_start", f"Use roster start ({shift['start_label']})"))
-        actions.append(_action("enter_actual_start", "Enter actual start"))
+        actions.append(_action("enter_actual_start", "Enter start"))
 
     elif "missing clock-out" in issue_l:
         if shift:
             actions.append(_action("clock_out_roster_finish", f"Use roster finish ({shift['end_label']})"))
-        actions.append(_action("enter_actual_finish", "Enter actual finish"))
+        actions.append(_action("enter_actual_finish", "Enter finish"))
 
     elif "clock" in issue_l or "sequence" in issue_l or "order" in issue_l or "break" in issue_l:
         if shift:
             actions.append(_action("pay_roster_shift", f"Use rostered shift ({shift['label']})"))
-        actions.append(_action("enter_actual_shift", "Enter actual times"))
+        actions.append(_action("enter_actual_shift", "Enter correct shift"))
         actions.append(_action("advanced", "Review events"))
 
     if not actions:
@@ -196,13 +196,20 @@ def _blocker_actions(issue, shift):
 
 def _review_actions(review_type, shift, first_in, last_out):
     if review_type == "unrostered_work":
-        return [_action("approve_unrostered_shift", "Approve worked hours"), _action("advanced", "Review/Edit")]
+        if last_out:
+            return [
+                _action("approve_unrostered_shift", "Approve shift"),
+                _action("advanced", "Review events"),
+            ]
+        return [_action("advanced", "Still working")]
+
     if review_type == "rostered_no_activity":
         return [_action("advanced", "Add worked shift / mark absent")]
-    if review_type == "long_shift":
-        return [_action("advanced", "Review/Edit")]
-    return [_action("advanced", "Review/Edit")]
 
+    if review_type == "long_shift":
+        return [_action("advanced", "Review events")]
+
+    return [_action("advanced", "Review events")]
 
 def _row(employee, day, day_row, issue, actions, row_type="blocker", review_type=""):
     return {
